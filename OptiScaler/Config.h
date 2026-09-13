@@ -272,9 +272,8 @@ class Config
     CustomOptional<bool> DlssNrResidualAcrossRr { false };
     // RR residual history blend before private upscaling; v0.7.7 default, clamped to 0.01..1.
     CustomOptional<float> DlssNrResidualAcrossRrBlend { 0.08f };
-    // Toggles the pass in game. Unbound by default -- a key that does something unexpected is worse
-    // than one that does nothing.
-    CustomOptional<int> DlssNrToggleKey { UnboundKey };
+    // Toggles the pass in game. F6 is the default for quick A/B comparisons.
+    CustomOptional<int> DlssNrToggleKey { VK_F6 };
     CustomOptional<uint32_t> DlssNrPreset { 0 };
     CustomOptional<float> DlssNrIntensity { 1.0f };
     // 0 default (standard), 1 natural, 2 cinematic -- the model's own processing profiles.

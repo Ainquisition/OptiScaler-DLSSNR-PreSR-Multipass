@@ -1593,6 +1593,12 @@
     <ClCompile Include="dlssnr\DlssNr_ExposureScan.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClInclude Include="dlssnr\DlssNr_ExposureScan.h"><Filter>Header Files</Filter></ClInclude>
     <ClCompile Include="dlssnr\DlssNr_GpuLifetime.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="dlssnr\amd\AmdBridge.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="dlssnr\amd\AmdPreSr.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClInclude Include="dlssnr\amd\AmdBridge.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="dlssnr\amd\AmdPreSr.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="dlssnr\amd\ColorEncoding.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="dlssnr\amd\RuntimeHash.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="dlssnr\DlssNr_GpuLifetime.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="dlssnr\DlssNr_HoldParameters_Dx12.h"><Filter>Header Files</Filter></ClInclude>
     <ClCompile Include="dlssnr\DlssNr_Menu.cpp"><Filter>Source Files</Filter></ClCompile>

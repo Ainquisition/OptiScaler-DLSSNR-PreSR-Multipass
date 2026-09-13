@@ -2,6 +2,7 @@
 
 #include <dlssnr/DlssNr_ExposureScan.h>
 #include <dlssnr/DlssNr.h>
+#include <dlssnr/amd/AmdBridge.h>
 
 #include "ResTrack_dx12.h"
 
@@ -649,6 +650,29 @@ void ResTrack_Dx12::hkCreateUnorderedAccessView(ID3D12Device* This, ID3D12Resour
 void ResTrack_Dx12::hkExecuteCommandLists(ID3D12CommandQueue* This, UINT NumCommandLists,
                                           ID3D12CommandList* const* ppCommandLists)
 {
+    const auto executeBatch = [&](UINT count, ID3D12CommandList* const* lists)
+    {
+        DlssNr::AmdBridge::Submitting(This, count, lists);
+        o_ExecuteCommandLists(This, count, lists);
+        DlssNr::FinishedPictureSubmitted(This, count, lists);
+        DlssNr::AmdBridge::Submitted(This, count, lists);
+    };
+    const auto executeWithAmdIsolation = [&]
+    {
+        const int pending = DlssNr::AmdBridge::PendingListIndex(NumCommandLists, ppCommandLists);
+        if (NumCommandLists > 1 && pending >= 0)
+        {
+            if (pending > 0)
+                executeBatch(static_cast<UINT>(pending), ppCommandLists);
+            executeBatch(1, ppCommandLists + pending);
+            const UINT remaining = NumCommandLists - static_cast<UINT>(pending) - 1;
+            if (remaining > 0)
+                executeBatch(remaining, ppCommandLists + pending + 1);
+            return;
+        }
+        executeBatch(NumCommandLists, ppCommandLists);
+    };
+
     auto fg = State::Instance().currentFG;
 
     if (fg != nullptr && fg->IsActive() && !fg->IsPaused())
@@ -705,8 +729,7 @@ void ResTrack_Dx12::hkExecuteCommandLists(ID3D12CommandQueue* This, UINT NumComm
 
         if (!found.empty())
         {
-            o_ExecuteCommandLists(This, NumCommandLists, ppCommandLists);
-            DlssNr::FinishedPictureSubmitted(This, NumCommandLists, ppCommandLists);
+            executeWithAmdIsolation();
 
             for (size_t i = 0; i < found.size(); i++)
             {
@@ -719,8 +742,7 @@ void ResTrack_Dx12::hkExecuteCommandLists(ID3D12CommandQueue* This, UINT NumComm
 
     LOG_TRACK("Done NumCommandLists: {}", NumCommandLists);
 
-    o_ExecuteCommandLists(This, NumCommandLists, ppCommandLists);
-    DlssNr::FinishedPictureSubmitted(This, NumCommandLists, ppCommandLists);
+    executeWithAmdIsolation();
 }
 
 #pragma region Heap hooks

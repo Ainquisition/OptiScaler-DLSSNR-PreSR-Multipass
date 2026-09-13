@@ -7,6 +7,7 @@
 #include "State.h"
 #include <dlssnr/DlssNr_ExposureScan.h>
 #include <dlssnr/DlssNr_Pipeline_Dx12.h>
+#include <dlssnr/amd/AmdBridge.h>
 
 void IFeature_Dx12::ResourceBarrier(ID3D12GraphicsCommandList* InCommandList, ID3D12Resource* InResource,
                                     D3D12_RESOURCE_STATES InBeforeState, D3D12_RESOURCE_STATES InAfterState) const
@@ -60,8 +61,15 @@ bool IFeature_Dx12::Evaluate(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX
         return false;
     }
 
-    if (!NeuralRendering && Config::Instance()->DlssNrEnabled.value_or_default())
+    const bool amdNrBeforeUpscale = Config::Instance()->DlssNrEnabled.value_or_default() &&
+                                    Config::Instance()->DlssNrRunBeforeSr.value_or_default() &&
+                                    !sourceRayReconstruction && GetUpscalerType() != Upscaler::DLSSD &&
+                                    DlssNr::AmdBridge::CanUse(Device) &&
+                                    DlssNr::CanRunBeforeUpscale_Dx12(InParameters);
+
+    if (!amdNrBeforeUpscale && !NeuralRendering && Config::Instance()->DlssNrEnabled.value_or_default())
         NeuralRendering = std::make_unique<DlssNr_Dx12>("Neural Rendering", Device);
+    auto* activeNeuralRendering = amdNrBeforeUpscale ? nullptr : NeuralRendering.get();
 
     // Hold the inputs shared by NR and SR, not just NR's colour. Restore temporary
     // jitter/exposure/reset parameters even when evaluation exits early.
@@ -69,8 +77,8 @@ bool IFeature_Dx12::Evaluate(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX
     const D3D12_RESOURCE_STATES holdInputStates[] = {
         holdStates.color, holdStates.depth, holdStates.motion, holdStates.exposure
     };
-    if (NeuralRendering)
-        NeuralRendering->BeginInputHold(InCommandList, InParameters, holdInputStates);
+    if (activeNeuralRendering)
+        activeNeuralRendering->BeginInputHold(InCommandList, InParameters, holdInputStates);
     struct RestoreHoldParameters
     {
         DlssNr_Dx12* shader;
@@ -80,7 +88,7 @@ bool IFeature_Dx12::Evaluate(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX
             if (shader)
                 shader->EndInputHold(params);
         }
-    } restoreHold { NeuralRendering.get(), InParameters };
+    } restoreHold { activeNeuralRendering, InParameters };
 
     if (Config::Instance()->OverrideSharpness.value_or_default())
         _sharpness = Config::Instance()->Sharpness.value_or_default();
@@ -125,9 +133,9 @@ bool IFeature_Dx12::Evaluate(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX
 
     const bool rayReconstruction = sourceRayReconstruction || upscaler == Upscaler::DLSSD;
     // Specialized schedules own the two seams but keep the same per-feature shader/history lifetime.
-    const bool specializedNr = NeuralRendering && NeuralRendering->ProcessSeam(
+    const bool specializedNr = activeNeuralRendering && activeNeuralRendering->ProcessSeam(
         InCommandList, InParameters, true, timingQueue, rayReconstruction, submissionEpoch, interop, GetFeatureFlags());
-    const bool nrBeforeUpscale = NeuralRendering && !specializedNr &&
+    const bool nrBeforeUpscale = activeNeuralRendering && !specializedNr &&
                                  Config::Instance()->DlssNrEnabled.value_or_default() &&
                                  Config::Instance()->DlssNrRunBeforeSr.value_or_default() &&
                                  DlssNr::CanRunBeforeUpscale_Dx12(InParameters);
@@ -233,9 +241,10 @@ bool IFeature_Dx12::Evaluate(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX
               } });
     }
 
-    if (NeuralRendering && !specializedNr && !nrBeforeUpscale && Config::Instance()->DlssNrEnabled.value_or_default())
+    if (activeNeuralRendering && !specializedNr && !nrBeforeUpscale &&
+        Config::Instance()->DlssNrEnabled.value_or_default())
     {
-        pipeline.push_back(MakeDlssNrPass(*NeuralRendering, Device, InCommandList, InParameters, false,
+        pipeline.push_back(MakeDlssNrPass(*activeNeuralRendering, Device, InCommandList, InParameters, false,
                                           GetFeatureFlags(), timingQueue, interop, rayReconstruction, submissionEpoch));
     }
 
@@ -267,15 +276,15 @@ bool IFeature_Dx12::Evaluate(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX
     }
 
     // Post-seam scheduling sees the same final output identity as the pre-seam, after all ordinary passes.
-    if (NeuralRendering)
+    if (activeNeuralRendering)
         pipeline.push_back({ [](ID3D12Resource* output) { return output; },
                          [&](ID3D12Resource*, ID3D12Resource* output)
                          {
                              auto* previousOutput = GetUpscalerResource_Dx12(InParameters, NVSDK_NGX_Parameter_Output);
                              SetUpscalerResource_Dx12(InParameters, NVSDK_NGX_Parameter_Output, output);
-                             NeuralRendering->ProcessSeam(InCommandList, InParameters, false, timingQueue,
-                                                          rayReconstruction, submissionEpoch, interop,
-                                                          GetFeatureFlags());
+                             activeNeuralRendering->ProcessSeam(InCommandList, InParameters, false, timingQueue,
+                                                                rayReconstruction, submissionEpoch, interop,
+                                                                GetFeatureFlags());
                              SetUpscalerResource_Dx12(InParameters, NVSDK_NGX_Parameter_Output, previousOutput);
                              return true;
                          } });
@@ -286,26 +295,33 @@ bool IFeature_Dx12::Evaluate(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX
     auto* originalColor = GetUpscalerResource_Dx12(InParameters, NVSDK_NGX_Parameter_Color);
     const bool diagnoseNr = nrBeforeUpscale && !interop;
     if (diagnoseNr)
-        NeuralRendering->DiagnosePipeline(0, InCommandList, InParameters, originalColor, GetFeatureFlags(),
-                                         rayReconstruction);
+        activeNeuralRendering->DiagnosePipeline(0, InCommandList, InParameters, originalColor, GetFeatureFlags(),
+                                               rayReconstruction);
     if (nrBeforeUpscale)
     {
-        if (auto* nrInput = PrepareDlssNrInput(*NeuralRendering, Device, InCommandList, InParameters, GetFeatureFlags(),
-                                               timingQueue, interop, rayReconstruction, submissionEpoch))
+        if (auto* nrInput = PrepareDlssNrInput(*activeNeuralRendering, Device, InCommandList, InParameters,
+                                               GetFeatureFlags(), timingQueue, interop, rayReconstruction,
+                                               submissionEpoch))
+            SetUpscalerResource_Dx12(InParameters, NVSDK_NGX_Parameter_Color, nrInput);
+    }
+    else if (amdNrBeforeUpscale)
+    {
+        if (auto* nrInput = DlssNr::AmdBridge::Prepare(InCommandList, InParameters, timingQueue,
+                                                       GetFeatureFlags(), interop))
             SetUpscalerResource_Dx12(InParameters, NVSDK_NGX_Parameter_Color, nrInput);
     }
     if (diagnoseNr)
     {
         auto* edited = GetUpscalerResource_Dx12(InParameters, NVSDK_NGX_Parameter_Color);
-        NeuralRendering->DiagnosePipeline(1, InCommandList, InParameters, edited, GetFeatureFlags(),
-                                         rayReconstruction, edited != originalColor);
+        activeNeuralRendering->DiagnosePipeline(1, InCommandList, InParameters, edited, GetFeatureFlags(),
+                                               rayReconstruction, edited != originalColor);
     }
     UpscalerTime->Start(InCommandList);
     const bool evalResult = EvaluateInternal(InCommandList, InParameters);
     UpscalerTime->End(InCommandList);
     if (diagnoseNr)
-        NeuralRendering->DiagnosePipeline(2, InCommandList, InParameters, currentTarget, GetFeatureFlags(),
-                                         rayReconstruction, evalResult);
+        activeNeuralRendering->DiagnosePipeline(2, InCommandList, InParameters, currentTarget, GetFeatureFlags(),
+                                               rayReconstruction, evalResult);
     SetUpscalerResource_Dx12(InParameters, NVSDK_NGX_Parameter_Color, originalColor);
 
     if (!evalResult)
