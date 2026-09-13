@@ -42,9 +42,9 @@ int wmain(int argc,wchar_t** argv) try {
     expect(device!=nullptr,"No NVIDIA D3D12 adapter");
     if(argc==4 && std::wstring(argv[3])==L"--reject") {
         expect(!DlssNr::CompatibilityRuntime::Open(std::filesystem::path(argv[2])/L"nvngx_dlssnr.dll",device.Get(),allocate,destroy),
-               "unrecognized runtime accepted");
-        expect(!GetModuleHandleW(L"nvngx_dlssnr.dll"),"rejected runtime was loaded");
-        puts("PASS: unrecognized runtime rejected without loading or modifying it");return 0;
+               "incompatible module accepted");
+        expect(!GetModuleHandleW(L"nvngx_dlssnr.dll"),"rejected module not unloaded");
+        puts("PASS: incompatible module rejected and unloaded");return 0;
     }
     const wchar_t* paths[]={argv[2]}; NVSDK_NGX_FeatureCommonInfo info {};
     info.PathListInfo.Path=paths; info.PathListInfo.Length=1;
@@ -102,8 +102,9 @@ int wmain(int argc,wchar_t** argv) try {
     printf("cycle=%u\n",cycle);fflush(stdout);
     setup(p);
     NVSDK_NGX_Handle* driverHandle=nullptr;
-    expect(driverCreate(commands.Get(),(NVSDK_NGX_Feature)18,p,&driverHandle)==NVSDK_NGX_Result_FAIL_UnableToInitializeFeature && !driverHandle,
-           "expected driver rejection before direct fallback");
+    if(argc!=4 || std::wstring(argv[3])!=L"--direct")
+        expect(driverCreate(commands.Get(),(NVSDK_NGX_Feature)18,p,&driverHandle)==NVSDK_NGX_Result_FAIL_UnableToInitializeFeature && !driverHandle,
+               "expected driver rejection before direct fallback");
     auto backend=DlssNr::CompatibilityRuntime::Open(nrPath,device.Get(),allocate,destroy);
     expect(backend!=nullptr,"production direct backend open");
     auto shared=DlssNr::CompatibilityRuntime::Open(nrPath,device.Get(),allocate,destroy);
