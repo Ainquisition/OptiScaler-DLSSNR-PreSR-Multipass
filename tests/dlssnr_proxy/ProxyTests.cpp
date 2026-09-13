@@ -228,11 +228,13 @@ int main()
     proxy.ResetRecording(&commands);
     assert(CompatibilityMock::destroyed == 2 && Mock::allocations == Mock::destructions);
     const auto attempts = CompatibilityMock::opens;
+    CompatibilityMock::createResult = NVSDK_NGX_Result_Success;
     Mock::createResult = NVSDK_NGX_Result_Fail;
     proxy.RetryAfterFailure();
-    assert(run() == NVSDK_NGX_Result_Fail && !evaluated);
+    assert(run() == NVSDK_NGX_Result_Success && !evaluated);
+    proxy.Release();
     proxy.ResetRecording(&commands);
-    assert(CompatibilityMock::opens == attempts && Mock::allocations == Mock::destructions);
+    assert(CompatibilityMock::opens == attempts + 1 && Mock::allocations == Mock::destructions);
     Mock::createResult = NVSDK_NGX_Result_Success;
 
     // Clearing an older owner must not erase the current shader's menu snapshot.

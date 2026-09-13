@@ -176,11 +176,12 @@ unsigned int Context::Impl::Prepare(ID3D12GraphicsCommandList* cmdList, ID3D12De
         auto created =
             NVNGXProxy::D3D12_CreateFeature()(cmdList, (NVSDK_NGX_Feature) 18, state.params, &state.feature);
         LOG_INFO("NR diagnostic CreateFeature(18): result=0x{:08X} handle={}", (unsigned)created, (void*)state.feature);
-        if (created == NVSDK_NGX_Result_FAIL_UnableToInitializeFeature && !state.feature)
+        if (NVSDK_NGX_FAILED(created) && !state.feature)
         {
             state.compatibility = CompatibilityRuntime::TryOpen(device);
             if (state.compatibility)
             {
+                SetCreationParameters(state.params, settings, width, height);
                 created = state.compatibility->Create(cmdList, state.params, &state.feature);
                 LOG_INFO("NR compatibility: CreateFeature(18) result=0x{:08X} handle={}",
                          (unsigned)created, (void*)state.feature);

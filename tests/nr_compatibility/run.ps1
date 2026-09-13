@@ -31,6 +31,10 @@ foreach ($directory in (@("$build/non-runtime") + $NonRuntimeDirectories)) {
 }
 & "$build/smoke.exe" $Driver $RuntimeDirectory
 if ($LASTEXITCODE) { throw 'Compatibility GPU smoke failed.' }
+& "$build/smoke.exe" $Driver $RuntimeDirectory --preloaded
+if ($LASTEXITCODE) { throw 'Preloaded/wrapped runtime smoke failed.' }
+& "$build/smoke.exe" $Driver $RuntimeDirectory --owners
+if ($LASTEXITCODE) { throw 'Concurrent owner acquisition failed.' }
 foreach ($directory in $AdditionalRuntimeDirectories) {
     & "$build/smoke.exe" $Driver $directory --direct
     if ($LASTEXITCODE) { throw "Direct-runtime GPU smoke failed: $directory" }

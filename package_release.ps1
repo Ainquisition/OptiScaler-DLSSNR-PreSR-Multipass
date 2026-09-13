@@ -62,7 +62,7 @@ foreach ($name in @('CREDITS.md', 'NR-COMPATIBILITY.md', 'NR-MOTION-METADATA.md'
                     'DEFERRED-NR-DLSS.md', 'RESIDUAL-ACROSS-RR.md', 'COMPATIBILITY-CHANGES.md',
                     'NR-DLSS-ENLARGEMENT.md', 'NR-GPU-RETIREMENT.md', 'NR-NATIVE-STREAMLINE-PRESENT.md',
                     'NR-PRIVATE-RR.md', 'NR-VULKAN.md', 'NR-PHOTO-DIAGNOSTIC.md',
-                    'NR-UPSTREAM-REVIEW.md', 'NR-UPSTREAM-DIFF-INVENTORY.md', 'RTX40-MFG.md', 'NR-INITIALIZATION-DIAGNOSTICS.md', 'NR-DIRECT-RUNTIME.md')) {
+                    'NR-UPSTREAM-REVIEW.md', 'NR-UPSTREAM-DIFF-INVENTORY.md', 'RTX40-MFG.md', 'NR-INITIALIZATION-DIAGNOSTICS.md', 'NR-DIRECT-RUNTIME.md', 'NR-RESTRICTION-AUDIT.md')) {
     $files["docs/$name"] = Join-Path $root "docs/$name"
 }
 foreach ($entry in $files.GetEnumerator()) {

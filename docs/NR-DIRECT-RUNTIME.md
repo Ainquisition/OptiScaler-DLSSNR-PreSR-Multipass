@@ -1,12 +1,14 @@
 # Direct NR compatibility runtime
 
-The RTX20/30/40 compatibility DLL can be rejected by the NGX driver's signed loader. NR now tries a direct backend after `FAIL_UnableToInitializeFeature`, provided the driver returned no feature handle.
+The RTX20/30/40 compatibility DLL can be rejected by the NGX driver's signed loader. NR now tries a direct backend after a driver creation failure, provided the driver returned no feature handle.
 
 The backend resolves the runtime's required NR exports and caller-path imports by name. There is no version, file-size or hash allowlist and no fixed import offset. New builds can move their imports without an OptiScaler update. Missing exports, malformed imports and initialization failures produce specific log messages. No runtime is downloaded or bundled.
 
-`DlssNr_CompatibilityRuntime.*` owns loading and model calls. Its small `Paths.cpp` adapter supplies OptiScaler's NGX search paths. The existing NR proxy retains the backend until GPU retirement, then releases features, shuts down the last device owner, and unloads the runtime.
+`DlssNr_CompatibilityRuntime.*` owns loading and model calls. Its small `Paths.cpp` adapter supplies OptiScaler's NGX search paths. The existing NR proxy retains the backend until GPU retirement, then releases features. For its own module it shuts down the last device owner and unloads; for a preloaded module it drops only its own reference and leaves device-wide shutdown to the original owner.
 
-The model requires its caller's module path to contain `nvngx.dll`. The runtime's named ANSI/Unicode path imports supply that alias only during direct calls and only for the calling OptiScaler module. Other queries retain their normal behavior. There is no helper DLL, driver modification, or change to files on disk.
+The model requires its caller's module path to contain `nvngx.dll`. The runtime's named ANSI/Unicode path imports supply that alias only during direct calls and only for the calling OptiScaler module. Other queries chain the existing import target, including loader/overlay wrappers; teardown restores that target. There is no helper DLL, driver modification, or change to files on disk.
+
+See [the restriction audit](NR-RESTRICTION-AUDIT.md) for the related recovery and ownership changes.
 
 ## Validation
 

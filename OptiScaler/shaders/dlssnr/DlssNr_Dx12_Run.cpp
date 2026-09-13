@@ -259,9 +259,8 @@ auto DlssNr_Dx12::State::Run(ID3D12GraphicsCommandList* cmdList, ID3D12Resource*
 
     if (depthIn == nullptr || motionIn == nullptr)
     {
-        nr.failed = true;
-        nr.reason = "the game's depth or motion vectors could not be made readable";
-        LOG_ERROR("DLSS-NR unavailable: {}", nr.reason);
+        nr.reset = true;
+        ReportSkipOnce("the game's depth or motion vectors could not be made readable this frame");
         FinishColor(false);
         device->Release();
         return;
@@ -493,7 +492,7 @@ auto DlssNr_Dx12::State::Run(ID3D12GraphicsCommandList* cmdList, ID3D12Resource*
         nr.failed = true;
         nr.reason = "the model refused to run";
 
-        LOG_ERROR("DLSS-NR evaluate returned 0x{:X} ({}), disabling for this session", (uint32_t) result,
+        LOG_ERROR("DLSS-NR evaluate returned 0x{:X} ({}); use Retry to recreate the model", (uint32_t) result,
                   NgxResultName((unsigned int) result));
     }
 

@@ -12,6 +12,10 @@
 #include <stdexcept>
 #include <vector>
 #include <filesystem>
+#include <psapi.h>
+#include <thread>
+#include <atomic>
+#include "../../OptiScaler/dlssnr/DlssNr_RuntimeImports.h"
 #include "../../OptiScaler/dlssnr/DlssNr_CompatibilityRuntime.h"
 using Microsoft::WRL::ComPtr;
 void check(HRESULT h) { if (FAILED(h)) throw std::runtime_error("D3D12 failure"); }
@@ -23,6 +27,10 @@ void barrier(ID3D12GraphicsCommandList* c,ID3D12Resource* r,D3D12_RESOURCE_STATE
     D3D12_RESOURCE_BARRIER x {}; x.Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION; x.Transition.pResource=r;
     x.Transition.Subresource=D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES; x.Transition.StateBefore=a; x.Transition.StateAfter=b;
     c->ResourceBarrier(1,&x);
+}
+static unsigned pathCalls=0;
+static DWORD WINAPI WrappedPath(HMODULE module,LPWSTR path,DWORD capacity) {
+    ++pathCalls;return GetModuleFileNameW(module,path,capacity);
 }
 int wmain(int argc,wchar_t** argv) try {
     expect(argc==3 || argc==4,"Usage: nr_compatibility_smoke <installed _nvngx.dll> <compatibility runtime directory>");
@@ -98,17 +106,51 @@ int wmain(int argc,wchar_t** argv) try {
         param->Set("DLSSNR.UseAutoMask",1u); param->Set("DLSSNR.UICorrection",1u);
     };
     auto nrPath=std::filesystem::path(argv[2])/L"nvngx_dlssnr.dll";
+    if(argc==4 && std::wstring(argv[3])==L"--owners") {
+        std::atomic<unsigned> failures=0;
+        std::vector<std::thread> threads;
+        for(unsigned worker=0;worker<4;++worker) threads.emplace_back([&] {
+            for(unsigned step=0;step<8;++step) {
+                auto owner=DlssNr::CompatibilityRuntime::Open(nrPath,device.Get(),allocate,destroy);
+                if(!owner) ++failures;
+                std::this_thread::yield();
+            }
+        });
+        for(auto& thread:threads) thread.join();
+        expect(failures==0,"concurrent owner acquisition rejected a live/retiring runtime");
+        ngx(destroy(p));ngx(destroy(p2));CloseHandle(event);
+        puts("PASS: 32 owner acquisitions across four threads without teardown rejection");return 0;
+    }
+    HMODULE preload=nullptr;
+    std::vector<DlssNr::RuntimeImports::Slot> wrappedSlots;
+    if(argc==4 && std::wstring(argv[3])==L"--preloaded") {
+        preload=LoadLibraryExW(nrPath.c_str(),nullptr,LOAD_WITH_ALTERED_SEARCH_PATH);expect(preload!=nullptr,"preload");
+        MODULEINFO loadedImage{};expect(GetModuleInformation(GetCurrentProcess(),preload,&loadedImage,sizeof(loadedImage))!=0,"module info");
+        std::vector<DlssNr::RuntimeImports::Slot> slots;
+        expect(DlssNr::RuntimeImports::Find({static_cast<unsigned char*>(loadedImage.lpBaseOfDll),loadedImage.SizeOfImage},slots),"imports");
+        for(auto slot:slots) if(slot.wide) {
+            DWORD protection=0,ignored=0;expect(VirtualProtect(slot.address,sizeof(void*),PAGE_READWRITE,&protection)!=0,"wrapper protect");
+            *slot.address=reinterpret_cast<void*>(&WrappedPath);VirtualProtect(slot.address,sizeof(void*),protection,&ignored);
+            wrappedSlots.push_back(slot);
+        }
+    }
+    const bool externallyLoaded=GetModuleHandleW(L"nvngx_dlssnr.dll")!=nullptr;
+    NVSDK_NGX_Handle* externalFeature=nullptr;
     for(unsigned cycle=0;cycle<4;++cycle) {
     printf("cycle=%u\n",cycle);fflush(stdout);
     setup(p);
     NVSDK_NGX_Handle* driverHandle=nullptr;
-    if(argc!=4 || std::wstring(argv[3])!=L"--direct")
+    if(!externallyLoaded && (argc!=4 || std::wstring(argv[3])!=L"--direct"))
         expect(driverCreate(commands.Get(),(NVSDK_NGX_Feature)18,p,&driverHandle)==NVSDK_NGX_Result_FAIL_UnableToInitializeFeature && !driverHandle,
                "expected driver rejection before direct fallback");
     auto backend=DlssNr::CompatibilityRuntime::Open(nrPath,device.Get(),allocate,destroy);
     expect(backend!=nullptr,"production direct backend open");
     auto shared=DlssNr::CompatibilityRuntime::Open(nrPath,device.Get(),allocate,destroy);
     expect(shared==backend,"device initialization must be shared");
+    if(preload) {
+        wchar_t path[MAX_PATH]{};auto query=reinterpret_cast<decltype(&GetModuleFileNameW)>(*wrappedSlots[0].address);
+        const auto before=pathCalls;expect(query(preload,path,MAX_PATH)!=0 && pathCalls==before+1,"existing path wrapper was not chained");
+    }
     auto nr=GetModuleHandleW(L"nvngx_dlssnr.dll");expect(nr!=nullptr,"runtime module present");
     auto rawCreate=proc<decltype(driverCreate)>(nr,"NVSDK_NGX_D3D12_CreateFeature");
     NVSDK_NGX_Handle* rejected=nullptr;
@@ -137,6 +179,10 @@ int wmain(int argc,wchar_t** argv) try {
         }
     };
     bind(p);bind(p2);
+    if(externalFeature) { ngx(backend->Evaluate(commands.Get(),externalFeature,p));submit(); }
+    if(preload && cycle==0) { ngx(backend->Create(commands.Get(),p,&externalFeature));submit(); }
+    if(externalFeature && cycle==3) { ngx(backend->Release(externalFeature));externalFeature=nullptr; }
+
     for(unsigned frame=0;frame<3;++frame) for(unsigned index=0;index<2;++index) {
         auto* params=index?p2:p; auto* handle=index?other:feature;
         params->Set("DLSSNR.Reset",frame==0?1u:0u);
@@ -165,9 +211,11 @@ int wmain(int argc,wchar_t** argv) try {
     readback->Unmap(0,nullptr);
     ngx(release(feature));ngx(release(other));
     backend.reset();expect(GetModuleHandleW(L"nvngx_dlssnr.dll")!=nullptr,"shared owner lost runtime");
-    shared.reset();expect(GetModuleHandleW(L"nvngx_dlssnr.dll")==nullptr,"runtime did not unload after shutdown");
+    shared.reset();expect((GetModuleHandleW(L"nvngx_dlssnr.dll")!=nullptr)==externallyLoaded,"runtime ownership changed after teardown");
+    for(auto slot:wrappedSlots) expect(*slot.address==reinterpret_cast<void*>(&WrappedPath),"previous import wrapper was not restored");
     }
+    if(preload) FreeLibrary(preload);
     ngx(destroy(p));ngx(destroy(p2));CloseHandle(event);
-    puts("PASS: four init/shutdown/unload cycles, eight distinct features, 24 GPU-fenced evaluations, finite image readback; ordinary executable name");
+    puts("PASS: four backend-owner cycles, independent features, fenced evaluations, image readback, and preserved module/import ownership");
     return 0;
 } catch(const std::exception& e) {fprintf(stderr,"FAIL: %s\n",e.what());return 1;}
