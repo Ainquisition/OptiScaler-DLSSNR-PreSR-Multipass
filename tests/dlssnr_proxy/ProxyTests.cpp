@@ -11,6 +11,31 @@ Scope::~Scope() {}
 void RuntimeReport(ID3D12GraphicsCommandList*, ID3D12Device*, const char*) {}
 }
 
+// Routing seam: hardware tests separately exercise the real compatibility loader.
+namespace CompatibilityMock {
+bool available=false;
+unsigned opens=0,creates=0,evaluates=0,releases=0,destroyed=0;
+NVSDK_NGX_Result createResult=NVSDK_NGX_Result_Success;
+}
+namespace DlssNr {
+std::shared_ptr<CompatibilityRuntime> CompatibilityRuntime::TryOpen(ID3D12Device*) {
+    ++CompatibilityMock::opens;
+    return CompatibilityMock::available ? std::shared_ptr<CompatibilityRuntime>(new CompatibilityRuntime()) : nullptr;
+}
+CompatibilityRuntime::~CompatibilityRuntime() { ++CompatibilityMock::destroyed; }
+NVSDK_NGX_Result CompatibilityRuntime::Create(ID3D12GraphicsCommandList* c,NVSDK_NGX_Parameter* p,NVSDK_NGX_Handle** h) {
+    ++CompatibilityMock::creates;
+    const auto saved=Mock::createResult;Mock::createResult=CompatibilityMock::createResult;
+    const auto result=Mock::Create(c,(NVSDK_NGX_Feature)18,p,h);Mock::createResult=saved;return result;
+}
+NVSDK_NGX_Result CompatibilityRuntime::Evaluate(ID3D12GraphicsCommandList* c,const NVSDK_NGX_Handle* h,NVSDK_NGX_Parameter* p) {
+    ++CompatibilityMock::evaluates;return Mock::Evaluate(c,h,p,nullptr);
+}
+NVSDK_NGX_Result CompatibilityRuntime::Release(NVSDK_NGX_Handle* h) {
+    ++CompatibilityMock::releases;return Mock::Release(h);
+}
+}
+
 // NGX tests substitute completion only; nr_gpu_lifetime_smoke exercises real D3D12 fences.
 struct DlssNr::GpuLifetime::Impl
 {
@@ -174,6 +199,41 @@ int main()
     assert(Mock::handles.size() == 1);
     proxy.ResetRecording(&commands);
     assert(Mock::handles.empty() && Mock::allocations == Mock::destructions);
+
+    // Only the earlier driver initialization rejection tried compatibility loading.
+    assert(CompatibilityMock::opens == 1);
+    Mock::createResult = NVSDK_NGX_Result_FAIL_UnableToInitializeFeature;
+    proxy.RetryAfterFailure();
+    assert(run() == NVSDK_NGX_Result_FAIL_UnableToInitializeFeature && !evaluated);
+    proxy.ResetRecording(&commands);
+    assert(CompatibilityMock::opens == 2 && Mock::handles.empty());
+
+    CompatibilityMock::available = true;
+    proxy.RetryAfterFailure();
+    assert(run() == NVSDK_NGX_Result_Success && !evaluated);
+    proxy.ResetRecording(&commands);
+    assert(run() == NVSDK_NGX_Result_Success && evaluated);
+    assert(CompatibilityMock::creates == 1 && CompatibilityMock::evaluates == 1);
+    proxy.Release();
+    assert(CompatibilityMock::releases == 0 && CompatibilityMock::destroyed == 0);
+    proxy.ResetRecording(&commands);
+    assert(CompatibilityMock::releases == 1 && CompatibilityMock::destroyed == 1);
+    assert(Mock::handles.empty() && Mock::allocations == Mock::destructions);
+
+    // Direct creation failures also retain backend ownership until recording is retired.
+    CompatibilityMock::createResult = NVSDK_NGX_Result_Fail;
+    proxy.RetryAfterFailure();
+    assert(run() == NVSDK_NGX_Result_Fail && !evaluated);
+    assert(CompatibilityMock::destroyed == 1);
+    proxy.ResetRecording(&commands);
+    assert(CompatibilityMock::destroyed == 2 && Mock::allocations == Mock::destructions);
+    const auto attempts = CompatibilityMock::opens;
+    Mock::createResult = NVSDK_NGX_Result_Fail;
+    proxy.RetryAfterFailure();
+    assert(run() == NVSDK_NGX_Result_Fail && !evaluated);
+    proxy.ResetRecording(&commands);
+    assert(CompatibilityMock::opens == attempts && Mock::allocations == Mock::destructions);
+    Mock::createResult = NVSDK_NGX_Result_Success;
 
     // Clearing an older owner must not erase the current shader's menu snapshot.
     DlssNr::StatusSnapshot status;

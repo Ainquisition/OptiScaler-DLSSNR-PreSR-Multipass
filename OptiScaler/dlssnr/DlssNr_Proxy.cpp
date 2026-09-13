@@ -2,6 +2,7 @@
 #include "DlssNr_Proxy.h"
 #include "DlssNr_GpuLifetime.h"
 #include "DlssNr_NgxDiagnostics.h"
+#include "DlssNr_CompatibilityRuntime.h"
 
 #include <Logger.h>
 #include <proxies/NVNGX_Proxy.h>
@@ -21,6 +22,7 @@ struct ProxyState
 {
     NVSDK_NGX_Handle* feature = nullptr;
     NVSDK_NGX_Parameter* params = nullptr;
+    std::shared_ptr<DlssNr::CompatibilityRuntime> compatibility;
 
     DlssNr::Proxy::Settings settings {};
     unsigned int width = 0, height = 0;
@@ -32,8 +34,12 @@ struct ProxyState
 
 void DestroyState(ProxyState& state)
 {
-    if (state.feature != nullptr && NVNGXProxy::D3D12_ReleaseFeature() != nullptr)
-        NVNGXProxy::D3D12_ReleaseFeature()(state.feature);
+    if (state.feature != nullptr)
+    {
+        if (state.compatibility) state.compatibility->Release(state.feature);
+        else if (NVNGXProxy::D3D12_ReleaseFeature() != nullptr)
+            NVNGXProxy::D3D12_ReleaseFeature()(state.feature);
+    }
 
     if (state.params != nullptr && NVNGXProxy::D3D12_DestroyParameters() != nullptr)
         NVNGXProxy::D3D12_DestroyParameters()(state.params);
@@ -167,16 +173,26 @@ unsigned int Context::Impl::Prepare(ID3D12GraphicsCommandList* cmdList, ID3D12De
         SetCreationParameters(state.params, settings, width, height);
 
         lifetime.Record(cmdList);
-        const auto created =
+        auto created =
             NVNGXProxy::D3D12_CreateFeature()(cmdList, (NVSDK_NGX_Feature) 18, state.params, &state.feature);
         LOG_INFO("NR diagnostic CreateFeature(18): result=0x{:08X} handle={}", (unsigned)created, (void*)state.feature);
+        if (created == NVSDK_NGX_Result_FAIL_UnableToInitializeFeature && !state.feature)
+        {
+            state.compatibility = CompatibilityRuntime::TryOpen(device);
+            if (state.compatibility)
+            {
+                created = state.compatibility->Create(cmdList, state.params, &state.feature);
+                LOG_INFO("NR compatibility: CreateFeature(18) result=0x{:08X} handle={}",
+                         (unsigned)created, (void*)state.feature);
+            }
+        }
         NgxDiagnostics::RuntimeReport(cmdList, device, "after CreateFeature(18)");
 
         if (created != NVSDK_NGX_Result_Success || state.feature == nullptr)
         {
             RetireState();
             state.failed = true;
-            LOG_ERROR("DLSS-NR (driver): CreateFeature(18) failed 0x{:X}", (unsigned int) created);
+            LOG_ERROR("DLSS-NR: CreateFeature(18) failed 0x{:X}", (unsigned int) created);
             return (unsigned int) (created == NVSDK_NGX_Result_Success ? NVSDK_NGX_Result_Fail : created);
         }
 
@@ -185,7 +201,8 @@ unsigned int Context::Impl::Prepare(ID3D12GraphicsCommandList* cmdList, ID3D12De
         state.width = width;
         state.height = height;
         state.creationEpoch = submissionEpoch;
-        LOG_INFO("DLSS-NR (driver): feature created at {}x{} through the NVIDIA NGX driver", width, height);
+        LOG_INFO("DLSS-NR: feature created at {}x{} through {}", width, height,
+                 state.compatibility ? "direct compatibility runtime" : "NVIDIA NGX driver");
 
         // Creation must reach the GPU before any evaluation is recorded.
         return (unsigned int) NVSDK_NGX_Result_Success;
@@ -258,7 +275,8 @@ unsigned int Context::Impl::Run(ID3D12GraphicsCommandList* cmdList, ID3D12Device
     SetUInt(params, "DLSSNR.UseAutoMask", settings.autoMask ? 1u : 0u);
 
     lifetime.Record(cmdList);
-    const auto result = NVNGXProxy::D3D12_EvaluateFeature()(cmdList, state.feature, params, nullptr);
+    const auto result = state.compatibility ? state.compatibility->Evaluate(cmdList, state.feature, params)
+                                           : NVNGXProxy::D3D12_EvaluateFeature()(cmdList, state.feature, params, nullptr);
 
     if (result == NVSDK_NGX_Result_Success)
     {
