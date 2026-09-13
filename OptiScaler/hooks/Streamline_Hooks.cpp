@@ -1,7 +1,9 @@
 #include <pch.h>
 
 #include "Streamline_Hooks.h"
+#if defined(OPTISCALER_RTX40_MFG)
 #include <framegen/dlssg/MfgUnlock.h>
+#endif
 #include <dlssnr/DlssNr_StreamlinePicture.h>
 
 #include <Util.h>
@@ -1148,12 +1150,18 @@ sl::Result StreamlineHooks::hkslDLSSGSetOptions(const sl::ViewportHandle& viewpo
 
     if (dlssgPotentiallyActive && state.streamlineVersion >= feature_version { 2, 7, 1 })
     {
+#if defined(OPTISCALER_RTX40_MFG)
         MfgUnlock::TryApply();
         if (const auto maximum = MfgUnlock::UnlockedMax(); maximum > 0)
             state.dlssgMfgMax = std::max(state.dlssgMfgMax.value_or(0), static_cast<int>(maximum));
+#endif
 
         // Populate dlssgMfgMax once
-        if (!state.dlssgMfgMax.has_value() && !MfgUnlock::Pending())
+        if (!state.dlssgMfgMax.has_value()
+#if defined(OPTISCALER_RTX40_MFG)
+            && !MfgUnlock::Pending()
+#endif
+        )
         {
             sl::DLSSGState localState {};
             sl::DLSSGOptions localOptions {};
@@ -1210,7 +1218,9 @@ sl::Result StreamlineHooks::hkslDLSSGGetState(const sl::ViewportHandle& viewport
 {
     sl::Result result {};
 
+#if defined(OPTISCALER_RTX40_MFG)
     MfgUnlock::TryApply();
+#endif
     const auto originalStructVersion = state.structVersion;
     if (originalStructVersion < 4)
     {
@@ -1249,9 +1259,11 @@ sl::Result StreamlineHooks::hkslDLSSGGetState(const sl::ViewportHandle& viewport
         State::Instance().dlssgGameDMFGSupported = state.bIsDynamicMFGSupported == sl::eTrue;
     }
 
+#if defined(OPTISCALER_RTX40_MFG)
     // Version 1 has no maximum-count field: retain its ABI boundary.
     if (originalStructVersion >= 2)
         state.numFramesToGenerateMax = std::max(state.numFramesToGenerateMax, MfgUnlock::UnlockedMax());
+#endif
 
     if (!State::Instance().dlssgGameDMFGSupported)
     {
@@ -1259,12 +1271,18 @@ sl::Result StreamlineHooks::hkslDLSSGGetState(const sl::ViewportHandle& viewport
     }
 
     auto& optiState = State::Instance();
+#if defined(OPTISCALER_RTX40_MFG)
     if (const auto maximum = MfgUnlock::UnlockedMax(); maximum > 0)
         optiState.dlssgMfgMax = std::max(optiState.dlssgMfgMax.value_or(0), static_cast<int>(maximum));
+#endif
 
     if (optiState.streamlineVersion >= feature_version { 2, 7, 1 })
     {
-        if (!optiState.dlssgMfgMax.has_value() && !MfgUnlock::Pending())
+        if (!optiState.dlssgMfgMax.has_value()
+#if defined(OPTISCALER_RTX40_MFG)
+            && !MfgUnlock::Pending()
+#endif
+        )
         {
             sl::DLSSGState localState {};
             sl::DLSSGOptions localOptions {};

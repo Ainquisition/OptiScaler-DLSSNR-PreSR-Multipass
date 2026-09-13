@@ -3,7 +3,8 @@
 param(
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]*$')]
     [string]$Version = 'nr-dev',
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$EnableRtx40Mfg
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,11 +24,16 @@ if (-not $SkipBuild) {
         }
     }
     if (-not $msbuild) { throw 'MSBuild.exe was not found. Use a Visual Studio developer PowerShell.' }
-    & $msbuild (Join-Path $root 'OptiScaler.sln') /p:Configuration=Release /p:Platform=x64 /p:PostBuildEventUseInBuild=false /v:minimal /m
+    & $msbuild (Join-Path $root 'OptiScaler.sln') /p:Configuration=Release /p:Platform=x64 /p:PostBuildEventUseInBuild=false "/p:OptiScalerRtx40Mfg=$($EnableRtx40Mfg.IsPresent.ToString().ToLowerInvariant())" /v:minimal /m
     if ($LASTEXITCODE -ne 0) { throw 'OptiScaler build failed.' }
 }
 
-$buildRoot = Join-Path $root 'x64/Release'
+$buildFolder = if ($EnableRtx40Mfg) { 'x64/Release-RTX40-MFG' } else { 'x64/Release' }
+$buildRoot = Join-Path $root $buildFolder
+# Also reject a stale/wrong-flavour DLL when using -SkipBuild.
+$dllText = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes((Join-Path $buildRoot 'OptiScaler.dll')))
+$hasUnlock = $dllText.Contains('RTX 40 MFG unlock (restart)')
+if ($hasUnlock -ne $EnableRtx40Mfg.IsPresent) { throw 'DLL RTX 40 MFG feature does not match the requested package.' }
 # Validate every source before creating the staging tree. An explicit manifest prevents stale
 # Streamline/MFG, removed NR helpers or discarded experiment files entering this package.
 $files = @{}
@@ -77,6 +83,11 @@ foreach ($entry in $files.GetEnumerator()) {
     $destination = Join-Path $stage $entry.Key
     New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
     Copy-Item -LiteralPath $entry.Value -Destination $destination
+}
+if (-not $EnableRtx40Mfg) {
+    $ini = $ini -replace '(?m)^; Experimental built-in RTX 40 MFG unlock[^\r\n]*\r?\n', ''
+    $ini = $ini -replace '(?m)^AdaMfgUnlock=[^\r\n]*\r?\n', ''
+    [IO.File]::WriteAllText((Join-Path $stage 'OptiScaler.ini'), $ini, [Text.UTF8Encoding]::new($false))
 }
 [IO.File]::WriteAllText((Join-Path $stage '!! EXTRACT ALL FILES TO GAME FOLDER !!'), '')
 

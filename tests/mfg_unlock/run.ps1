@@ -12,7 +12,7 @@ $build = @"
 @echo off
 call "$vs/VC/Auxiliary/Build/vcvars64.bat" >nul
 if errorlevel 1 exit /b 1
-cl /nologo /std:c++20 /EHsc /W4 /DUNICODE /D_UNICODE /I "$out/seams" /I "$repo/OptiScaler" "$PSScriptRoot/PatchTests.cpp" /Fe:"$out/mfg-patch.exe" /Fo:"$out/mfg-patch.obj"
+cl /nologo /std:c++20 /EHsc /W4 /DUNICODE /D_UNICODE /DOPTISCALER_RTX40_MFG /I "$out/seams" /I "$repo/OptiScaler" "$PSScriptRoot/PatchTests.cpp" /Fe:"$out/mfg-patch.exe" /Fo:"$out/mfg-patch.obj"
 "@
 Set-Content -LiteralPath "$out/build.cmd" -Value $build
 & "$out/build.cmd"

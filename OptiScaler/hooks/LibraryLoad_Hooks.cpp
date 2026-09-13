@@ -1,6 +1,8 @@
 #include "pch.h"
 #include "LibraryLoad_Hooks.h"
+#if defined(OPTISCALER_RTX40_MFG)
 #include <framegen/dlssg/MfgUnlock.h>
+#endif
 
 #include <Config.h>
 #include <DllNames.h>
@@ -109,6 +111,7 @@ HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibF
     }
 
     // Patch a supported Ada snippet before NGX reads and caches its capabilities.
+#if defined(OPTISCALER_RTX40_MFG)
     if (std::filesystem::path(normalizedPath).filename() == L"nvngx_dlssg.dll" && MfgUnlock::Pending())
     {
         auto snippet = NtdllProxy::LoadLibraryExW_Ldr(lpLibFullPath, NULL, 0);
@@ -116,6 +119,7 @@ HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibF
             MfgUnlock::TryApply(snippet);
         return snippet;
     }
+#endif
 
     // NGX OTA
     // Try to catch something like this:

@@ -1,10 +1,28 @@
 # v0.8.0 with RTX 40 MFG
 
-This separate variant restores the built-in Ada unlock from the earlier fork. NR is unchanged from v0.8.0. The unlock is compiled into OptiScaler: no extra helper, ASI loader or external-FG mode is needed.
+This branch retains the built-in Ada unlock as an optional build feature. Both builds include the Starfield tracking fix. The unlock is compiled into OptiScaler: no extra helper, ASI loader or external-FG mode is needed.
 
-## Enable
+## Build
 
-1. Install the complete variant package, preserving your INI and separately supplied NR runtime.
+The default build excludes the unlock implementation, hooks, capability overrides, menu and configuration field. Ordinary DLSS FG/MFG remains available. Legacy `AdaMfgUnlock` settings are ignored and removed on save.
+
+```powershell
+# Without the unlock (default)
+MSBuild OptiScaler.sln /p:Configuration=Release /p:Platform=x64 /p:OptiScalerRtx40Mfg=false
+./package_release.ps1 -Version nr-standard
+
+# Compile the optional unlock
+MSBuild OptiScaler.sln /p:Configuration=Release /p:Platform=x64 /p:OptiScalerRtx40Mfg=true
+./package_release.ps1 -Version nr-rtx40-mfg -EnableRtx40Mfg
+```
+
+Enabled builds use `x64/Release-RTX40-MFG`; standard builds use `x64/Release`. Separate intermediate folders prevent mixing objects/PCH files. Packaging checks the DLL flavour even with `-SkipBuild` and omits the unlock INI default for standard packages.
+
+`OptiScalerRtx40Mfg=true` defines `OPTISCALER_RTX40_MFG`. The runtime toggle still defaults off. Keeping the restoration/build-flag commits separate lets upstream reviews omit their source changes too: a disabled build flag alone does not remove them from a PR diff.
+
+## Enable at runtime
+
+1. Install the complete **unlock-enabled** package, preserving your INI and separately supplied NR runtime.
 2. Under frame-generation settings, enable **RTX 40 MFG unlock (restart)**, save and restart the game. Alternatively set `[DLSSG] AdaMfgUnlock=true` before launch.
 3. Enable the game's DLSS FG or configure OptiScaler's normal DLSSG output. Start at 3x and check motion as well as the FPS counter.
 

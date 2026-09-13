@@ -303,6 +303,22 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
       <Command>powershell -NoProfile -Command "Start-Sleep -Milliseconds 1500; $date = Get-Date -Format 'yyyyMMdd_HHmmss'; $commit = (git rev-parse --short HEAD 2&gt;$null); if (-not $commit) { $commit = 'unknown' }; Set-Content -Path '$(ProjectDir)resource_build_date.h' -Value ('#define VER_BUILD_DATE \"' + $date + '\"') -Force; Set-Content -Path '$(ProjectDir)resource_build_commit.h' -Value ('#define VER_BUILD_COMMIT \"' + $commit + '\"') -Force;"</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
+  <PropertyGroup>
+    <OptiScalerRtx40Mfg Condition="'$(OptiScalerRtx40Mfg)'==''">false</OptiScalerRtx40Mfg>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(OptiScalerRtx40Mfg)'=='true'">
+    <OutDir>$(SolutionDir)$(Platform)\$(Configuration)-RTX40-MFG\</OutDir>
+    <IntDir>$(Platform)\$(Configuration)-RTX40-MFG\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(OptiScalerRtx40Mfg)'=='true'">
+    <ClCompile>
+      <PreprocessorDefinitions>OPTISCALER_RTX40_MFG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <Target Name="ValidateRtx40MfgFlag" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(OptiScalerRtx40Mfg)'!='true' and '$(OptiScalerRtx40Mfg)'!='false'"
+           Text="OptiScalerRtx40Mfg must be true or false." />
+  </Target>
   <ItemGroup>
     <ClInclude Include="framegen\nvngx\Nvngx_Combo.h" />
     <ClInclude Include="fsr4\FSR4Upgrade.h" />
@@ -615,7 +631,9 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="gpu_time\GpuTime_Dx12.cpp" />
     <ClCompile Include="hooks\Amdxc64_Hooks.cpp" />
     <ClCompile Include="framegen\dlssg\DLSSG_Dx12.cpp" />
-    <ClCompile Include="framegen\dlssg\MfgUnlock.cpp" />
+    <ClCompile Include="framegen\dlssg\MfgUnlock.cpp">
+      <ExcludedFromBuild Condition="'$(OptiScalerRtx40Mfg)'!='true'">true</ExcludedFromBuild>
+    </ClCompile>
     <ClCompile Include="framegen\ffx\FSRFG_Dx12.cpp" />
     <ClCompile Include="framegen\IFGFeature.cpp" />
     <ClCompile Include="framegen\IFGFeature_Dx12.cpp" />

@@ -1,6 +1,8 @@
 // Adapted from y4my4my4m/OptiScaler_DLSSNR_Multipass_MFG, tag v4 (7b7220bb), GPL-3.0.
 #pragma once
 
+#if defined(OPTISCALER_RTX40_MFG)
+
 #include <SysUtils.h>
 
 #include <string>
@@ -60,3 +62,5 @@ bool Pending();
 // The generated frame ceiling the patches opened, or 0 when they did not land.
 unsigned int UnlockedMax();
 } // namespace MfgUnlock
+
+#endif

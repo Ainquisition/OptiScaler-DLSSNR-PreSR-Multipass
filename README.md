@@ -38,7 +38,7 @@
 
 ## Neural Rendering on this branch
 
-This v0.8.0 variant also includes the optional [built-in RTX 40 MFG unlock](docs/RTX40-MFG.md). It is separate from the upstream NR proposal and defaults off.
+The [built-in RTX 40 MFG unlock](docs/RTX40-MFG.md) is an optional build feature, excluded by default and separate from the upstream NR proposal.
 
 Experimental NR adds pre/post-upscale and finished-picture processing, multipass tuning,
 model resolution, HDR/exposure controls and separate edit upscaling. It defaults off and
