@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "LibraryLoad_Hooks.h"
+#include <framegen/dlssg/MfgUnlock.h>
 
 #include <Config.h>
 #include <DllNames.h>
@@ -105,6 +106,15 @@ HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibF
             return nvngxDlss;
         else
             LOG_ERROR("Trying to load dll: {}", libNameA);
+    }
+
+    // Patch a supported Ada snippet before NGX reads and caches its capabilities.
+    if (std::filesystem::path(normalizedPath).filename() == L"nvngx_dlssg.dll" && MfgUnlock::Pending())
+    {
+        auto snippet = NtdllProxy::LoadLibraryExW_Ldr(lpLibFullPath, NULL, 0);
+        if (snippet)
+            MfgUnlock::TryApply(snippet);
+        return snippet;
     }
 
     // NGX OTA

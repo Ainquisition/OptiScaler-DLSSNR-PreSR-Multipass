@@ -56,7 +56,7 @@ foreach ($name in @('CREDITS.md', 'NR-COMPATIBILITY.md', 'NR-MOTION-METADATA.md'
                     'DEFERRED-NR-DLSS.md', 'RESIDUAL-ACROSS-RR.md', 'COMPATIBILITY-CHANGES.md',
                     'NR-DLSS-ENLARGEMENT.md', 'NR-GPU-RETIREMENT.md', 'NR-NATIVE-STREAMLINE-PRESENT.md',
                     'NR-PRIVATE-RR.md', 'NR-VULKAN.md', 'NR-PHOTO-DIAGNOSTIC.md',
-                    'NR-UPSTREAM-REVIEW.md', 'NR-UPSTREAM-DIFF-INVENTORY.md')) {
+                    'NR-UPSTREAM-REVIEW.md', 'NR-UPSTREAM-DIFF-INVENTORY.md', 'RTX40-MFG.md')) {
     $files["docs/$name"] = Join-Path $root "docs/$name"
 }
 foreach ($entry in $files.GetEnumerator()) {
@@ -67,7 +67,7 @@ foreach ($entry in $files.GetEnumerator()) {
 
 $ini = Get-Content -LiteralPath $files['OptiScaler.ini'] -Raw
 if ($ini -match '(?mi)^Enabled=true\s*$') { throw 'A feature is enabled in the default INI.' }
-foreach ($key in @('FinishedPicture', 'DeferredDLSS', 'UnlockPasses')) {
+foreach ($key in @('FinishedPicture', 'DeferredDLSS', 'UnlockPasses', 'AdaMfgUnlock')) {
     if ($ini -match "(?mi)^$key=true\s*$") { throw "Experimental option $key is enabled in the default INI." }
 }
 if ($ini -notmatch '(?mi)^TargetProcessName=auto\s*$') { throw 'The INI contains a game-specific process filter.' }

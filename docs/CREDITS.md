@@ -6,6 +6,8 @@ Colour processing derives from [clshortfuse's RenoDX](https://github.com/clshort
 
 Integrations include hhkbble's multipass/composition, [y4my4my4m's Vulkan work](NR-VULKAN.md) and [cmh1448's motion metadata](NR-MOTION-METADATA.md). Linked notes identify source commits and test limits.
 
+This variant restores the built-in [Ada MFG work and attribution](RTX40-MFG.md), derived from y4my4my4m and the earlier fork under GPL-3.0.
+
 ## OptiScaler contributors
 
 - @PotatoOfDoom for CyberFSR2.

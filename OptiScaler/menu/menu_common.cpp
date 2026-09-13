@@ -1,6 +1,7 @@
 ﻿#include "pch.h"
 #include <dlssnr/DlssNr_MenuOverlay.h>
 #include "menu_common.h"
+#include <framegen/dlssg/MfgUnlock.h>
 #include <dlssnr/DlssNr_ExposureScan.h>
 
 #include <algorithm>
@@ -3151,6 +3152,29 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
     auto config = ctx.config;
     auto& menuResScale = ctx.menuResScale;
     auto& primaryGpu = *ctx.primaryGpu;
+
+    const bool adaEnabledForSession = MfgUnlock::EnabledForSession();
+    bool adaUnlock = config->FGDLSSGAdaMfgUnlock.value_or_default();
+    const bool isAda = primaryGpu.vendorId == VendorId::Nvidia &&
+                       primaryGpu.nvidiaArchInfo.architecture_id == NV_GPU_ARCHITECTURE_AD100;
+    ImGui::BeginDisabled(!isAda);
+    if (ImGui::Checkbox("RTX 40 MFG unlock (restart)", &adaUnlock))
+        config->FGDLSSGAdaMfgUnlock = adaUnlock;
+    ImGui::EndDisabled();
+    ShowHelpMarker("Experimental. Save Settings and restart. Requires a supported DLSSG runtime."
+                   "\nDo not combine with another MFG unlocker.");
+    if (isAda && (adaUnlock || adaEnabledForSession))
+    {
+        const auto status = MfgUnlock::LastStatus();
+        if (adaUnlock != adaEnabledForSession)
+            ImGui::TextWrapped("Save Settings and restart to apply this change.");
+        else if (!status.ModuleFound)
+            ImGui::TextWrapped("Waiting for DLSSG to load.");
+        else if (status.AdvertiseMatched && status.ValidateMatched && status.KernelsRewritten)
+            ImGui::TextWrapped("DLSSG %s: RTX 40 MFG unlock applied.", status.SnippetVersion.c_str());
+        else
+            ImGui::TextWrapped("DLSSG %s: unlock unavailable for this runtime.", status.SnippetVersion.c_str());
+    }
 
     /// FG INPUTS
     static std::vector<MenuOption<FGInput>> inputOptions;

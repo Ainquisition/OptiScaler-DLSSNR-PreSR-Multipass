@@ -1,6 +1,7 @@
 #include "pch.h"
 
 #include "DLSSG_Dx12.h"
+#include "MfgUnlock.h"
 
 #include <hudfix/Hudfix_Dx12.h>
 #include <menu/menu_overlay_dx.h>
@@ -123,11 +124,12 @@ bool DLSSG_Dx12::CreateSwapchain(IDXGIFactory* factory, ID3D12CommandQueue* cmdQ
         return false;
     }
 
+    MfgUnlock::TryApply();
     sl::DLSSGState dlssgState {};
     sl::DLSSGOptions dlssgOptions {};
     if (StreamlineProxy::DLSSGGetState()(viewport, dlssgState, &dlssgOptions) == sl::Result::eOk)
     {
-        _maxInterpolationCount = dlssgState.numFramesToGenerateMax;
+        _maxInterpolationCount = std::max(dlssgState.numFramesToGenerateMax, MfgUnlock::UnlockedMax());
         LOG_INFO("Max supported interpolations: {}", dlssgState.numFramesToGenerateMax);
 
         _supportsDMFG = dlssgState.bIsDynamicMFGSupported == sl::Boolean::eTrue;
@@ -237,11 +239,12 @@ bool DLSSG_Dx12::CreateSwapchain1(IDXGIFactory* factory, ID3D12CommandQueue* cmd
         }
     }
 
+    MfgUnlock::TryApply();
     sl::DLSSGState dlssgState {};
     sl::DLSSGOptions dlssgOptions {};
     if (StreamlineProxy::DLSSGGetState()(viewport, dlssgState, &dlssgOptions) == sl::Result::eOk)
     {
-        _maxInterpolationCount = dlssgState.numFramesToGenerateMax;
+        _maxInterpolationCount = std::max(dlssgState.numFramesToGenerateMax, MfgUnlock::UnlockedMax());
         LOG_INFO("Max supported interpolations: {}", dlssgState.numFramesToGenerateMax);
 
         _supportsDMFG = dlssgState.bIsDynamicMFGSupported == sl::Boolean::eTrue;

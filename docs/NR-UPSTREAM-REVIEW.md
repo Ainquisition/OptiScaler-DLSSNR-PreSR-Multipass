@@ -1,5 +1,7 @@
 # Neural Rendering review
 
+This report covers the v0.8.0 NR base. The separate [RTX 40 MFG variant](RTX40-MFG.md) adds an unlock; these game checks do not validate it.
+
 NR adds optional image processing before/after upscaling or on the finished picture. Separate-edit routes reconstruct the clean game image and upscale NR's contribution independently. It defaults off, runs inside OptiScaler and requires a separately supplied NVIDIA NR runtime.
 
 ## Scope

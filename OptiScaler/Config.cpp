@@ -226,6 +226,7 @@ bool Config::Reload(std::filesystem::path iniPath)
         }
 
         {
+            FGDLSSGAdaMfgUnlock.set_from_config(readBool("DLSSG", "AdaMfgUnlock"));
             FGDLSSGInterpolationCount.set_from_config(readInt("DLSSG", "InterpolationCount"));
             if (FGDLSSGInterpolationCount.has_value() &&
                 (FGDLSSGInterpolationCount.value() < 1 || FGDLSSGInterpolationCount.value() > 6))
@@ -973,7 +974,7 @@ bool Config::SaveIni()
         ini.SetValue("FrameGen", "Enabled", GetBoolValue(Instance()->FGEnabled.value_for_config()).c_str());
         // Discard settings from removed fork-only frame-generation extensions.
         ini.Delete("FrameGen", "External");
-        for (const auto* key : { "AdaMfgUnlock", "AdaBlackwellKernels", "AmpereMfgUnlock", "AmpereMfgMaxFrames",
+        for (const auto* key : { "AdaBlackwellKernels", "AmpereMfgUnlock", "AmpereMfgMaxFrames",
                                 "AmpereMfgKernelImage", "AmpereMfgHardwareBilinear" })
             ini.Delete("DLSSG", key);
         ini.SetValue("FrameGen", "DebugView", GetBoolValue(Instance()->FGDebugView.value_for_config()).c_str());
@@ -1103,6 +1104,7 @@ bool Config::SaveIni()
     }
 
     {
+        ini.SetValue("DLSSG", "AdaMfgUnlock", GetBoolValue(Instance()->FGDLSSGAdaMfgUnlock.value_for_config()).c_str());
         ini.SetValue("DLSSG", "InterpolationCount",
                      GetIntValue(Instance()->FGDLSSGInterpolationCount.value_for_config()).c_str());
         ini.SetValue("DLSSG", "UseGamesReflexMarkers",

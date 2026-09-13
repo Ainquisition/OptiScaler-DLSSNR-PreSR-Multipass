@@ -2,6 +2,8 @@
 
 NR is experimental and disabled by default. Do not use injection mods in anti-cheat-protected multiplayer games.
 
+This variant also includes an optional [RTX 40 MFG unlock](docs/RTX40-MFG.md), disabled by default. Its setup is separate from NR.
+
 ## Requirements
 
 - A 64-bit game using an OptiScaler D3D12 path, a supported D3D11/Vulkan bridge, or native Vulkan NR.

@@ -38,6 +38,8 @@
 
 ## Neural Rendering on this branch
 
+This v0.8.0 variant also includes the optional [built-in RTX 40 MFG unlock](docs/RTX40-MFG.md). It is separate from the upstream NR proposal and defaults off.
+
 Experimental NR adds pre/post-upscale and finished-picture processing, multipass tuning,
 model resolution, HDR/exposure controls and separate edit upscaling. It defaults off and
 uses a separately supplied `nvngx_dlssnr.dll` through the NVIDIA driver; no NR helper DLL.
@@ -201,4 +203,3 @@ This project uses [FreeType](https://gitlab.freedesktop.org/freetype/freetype) l
   </tr>
  </tbody>
 </table>
-

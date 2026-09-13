@@ -1,6 +1,7 @@
 #include <pch.h>
 
 #include "Streamline_Hooks.h"
+#include <framegen/dlssg/MfgUnlock.h>
 #include <dlssnr/DlssNr_StreamlinePicture.h>
 
 #include <Util.h>
@@ -1147,8 +1148,12 @@ sl::Result StreamlineHooks::hkslDLSSGSetOptions(const sl::ViewportHandle& viewpo
 
     if (dlssgPotentiallyActive && state.streamlineVersion >= feature_version { 2, 7, 1 })
     {
+        MfgUnlock::TryApply();
+        if (const auto maximum = MfgUnlock::UnlockedMax(); maximum > 0)
+            state.dlssgMfgMax = std::max(state.dlssgMfgMax.value_or(0), static_cast<int>(maximum));
+
         // Populate dlssgMfgMax once
-        if (!state.dlssgMfgMax.has_value())
+        if (!state.dlssgMfgMax.has_value() && !MfgUnlock::Pending())
         {
             sl::DLSSGState localState {};
             sl::DLSSGOptions localOptions {};
@@ -1205,6 +1210,7 @@ sl::Result StreamlineHooks::hkslDLSSGGetState(const sl::ViewportHandle& viewport
 {
     sl::Result result {};
 
+    MfgUnlock::TryApply();
     const auto originalStructVersion = state.structVersion;
     if (originalStructVersion < 4)
     {
@@ -1243,16 +1249,22 @@ sl::Result StreamlineHooks::hkslDLSSGGetState(const sl::ViewportHandle& viewport
         State::Instance().dlssgGameDMFGSupported = state.bIsDynamicMFGSupported == sl::eTrue;
     }
 
+    // Version 1 has no maximum-count field: retain its ABI boundary.
+    if (originalStructVersion >= 2)
+        state.numFramesToGenerateMax = std::max(state.numFramesToGenerateMax, MfgUnlock::UnlockedMax());
+
     if (!State::Instance().dlssgGameDMFGSupported)
     {
         Config::Instance()->FGDLSSGOverrideForceDMFG.set_volatile_value(false);
     }
 
     auto& optiState = State::Instance();
+    if (const auto maximum = MfgUnlock::UnlockedMax(); maximum > 0)
+        optiState.dlssgMfgMax = std::max(optiState.dlssgMfgMax.value_or(0), static_cast<int>(maximum));
 
     if (optiState.streamlineVersion >= feature_version { 2, 7, 1 })
     {
-        if (!optiState.dlssgMfgMax.has_value())
+        if (!optiState.dlssgMfgMax.has_value() && !MfgUnlock::Pending())
         {
             sl::DLSSGState localState {};
             sl::DLSSGOptions localOptions {};

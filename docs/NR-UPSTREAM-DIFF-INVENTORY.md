@@ -1,5 +1,7 @@
 # Upstream difference inventory
 
+This inventory covers the v0.8.0 NR base. Additional changes in the separate [RTX 40 MFG variant](RTX40-MFG.md) are outside the upstream proposal.
+
 Reference: official master `5ee53e38`. Each group states why its changed files are retained. See [tests and limits](NR-UPSTREAM-REVIEW.md) and [compatibility scope](COMPATIBILITY-CHANGES.md).
 
 ## NR packaging and installation
