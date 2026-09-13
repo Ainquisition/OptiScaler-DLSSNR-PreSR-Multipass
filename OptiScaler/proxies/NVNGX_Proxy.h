@@ -4,6 +4,7 @@
 #include "Util.h"
 #include "Config.h"
 #include "Logger.h"
+#include <dlssnr/DlssNr_NgxDiagnostics.h>
 
 #include <proxies/Ntdll_Proxy.h>
 #include <proxies/KernelBase_Proxy.h>
@@ -650,6 +651,7 @@ class NVNGXProxy
             Config::Instance()->LogLevel < 2 ? NVSDK_NGX_LOGGING_LEVEL_VERBOSE : NVSDK_NGX_LOGGING_LEVEL_ON;
         fcInfo->LoggingInfo.LoggingCallback = LogCallback;
         fcInfo->LoggingInfo.DisableOtherLoggingSinks = true;
+        DlssNr::NgxDiagnostics::Install(fcInfo->LoggingInfo);
     }
 
     static HMODULE NVNGXModule() { return _module.dll; }

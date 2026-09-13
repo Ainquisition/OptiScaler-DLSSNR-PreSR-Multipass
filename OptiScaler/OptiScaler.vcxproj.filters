@@ -1656,4 +1656,8 @@
     <ClInclude Include="dlssnr\DlssNr_StreamlinePicture.h"><Filter>Header Files</Filter></ClInclude>
     <ClCompile Include="dlssnr\DlssNr_StreamlinePicture.cpp"><Filter>Source Files</Filter></ClCompile>
   </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="dlssnr\DlssNr_NgxDiagnostics.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClInclude Include="dlssnr\DlssNr_NgxDiagnostics.h"><Filter>Header Files</Filter></ClInclude>
+  </ItemGroup>
 </Project>

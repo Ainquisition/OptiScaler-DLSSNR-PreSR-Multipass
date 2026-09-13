@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "DlssNr_Proxy.h"
 #include "DlssNr_GpuLifetime.h"
+#include "DlssNr_NgxDiagnostics.h"
 
 #include <Logger.h>
 #include <proxies/NVNGX_Proxy.h>
@@ -142,7 +143,10 @@ unsigned int Context::Impl::Prepare(ID3D12GraphicsCommandList* cmdList, ID3D12De
     {
         // A dedicated parameter map populated with NGX capabilities. Unlike the deprecated
         // GetParameters API, GetCapabilityParameters transfers ownership to the caller.
+        NgxDiagnostics::Scope nrCapabilityTrace;
         const auto allocated = NVNGXProxy::D3D12_GetCapabilityParameters()(&state.params);
+        LOG_INFO("NR diagnostic capability parameters: result=0x{:08X} params={}",
+                 (unsigned)allocated, (void*)state.params);
         if (allocated != NVSDK_NGX_Result_Success || state.params == nullptr)
         {
             DestroyState(state);
@@ -154,11 +158,19 @@ unsigned int Context::Impl::Prepare(ID3D12GraphicsCommandList* cmdList, ID3D12De
 
     if (state.feature == nullptr)
     {
+        NgxDiagnostics::Scope nrCreateTrace;
+        NgxDiagnostics::RuntimeReport(cmdList, device, "before CreateFeature(18)");
+        LOG_INFO("NR diagnostic creation: {}x{}, preset={}, style={}, intensity={}, structure={}, tone={}, "
+                 "skin={}, autoMask={}, node masks=1/1, UI correction=1, UI/control/backbuffer=null, epoch={}",
+                 width, height, settings.preset, settings.style, settings.intensity, settings.localStructure,
+                 settings.localTone, settings.skinStructure, settings.autoMask, submissionEpoch);
         SetCreationParameters(state.params, settings, width, height);
 
         lifetime.Record(cmdList);
         const auto created =
             NVNGXProxy::D3D12_CreateFeature()(cmdList, (NVSDK_NGX_Feature) 18, state.params, &state.feature);
+        LOG_INFO("NR diagnostic CreateFeature(18): result=0x{:08X} handle={}", (unsigned)created, (void*)state.feature);
+        NgxDiagnostics::RuntimeReport(cmdList, device, "after CreateFeature(18)");
 
         if (created != NVSDK_NGX_Result_Success || state.feature == nullptr)
         {

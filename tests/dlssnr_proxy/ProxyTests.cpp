@@ -4,6 +4,13 @@
 #include "../../OptiScaler/upscalers/ShaderPipeline_Dx12.h"
 #include "../../OptiScaler/dlssnr/DlssNr_HoldParameters_Dx12.h"
 
+namespace DlssNr::NgxDiagnostics
+{
+Scope::Scope() {}
+Scope::~Scope() {}
+void RuntimeReport(ID3D12GraphicsCommandList*, ID3D12Device*, const char*) {}
+}
+
 // NGX tests substitute completion only; nr_gpu_lifetime_smoke exercises real D3D12 fences.
 struct DlssNr::GpuLifetime::Impl
 {
