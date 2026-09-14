@@ -97,6 +97,7 @@ struct GpuLifetime::Impl
     using Uses = std::vector<std::shared_ptr<Recording>>;
     struct Retired { Uses uses; std::function<void()> destroy; };
     Uses recordings;
+    Uses currentGeneration;
     std::vector<Retired> retired;
     std::vector<std::shared_ptr<Timeline>> timelines;
     bool collecting = false;
@@ -134,7 +135,13 @@ void GpuLifetime::Record(ID3D12GraphicsCommandList* commands)
     commands = Identity(commands);
     Collect();
     for (const auto& use : impl->recordings)
-        if (use->open && use->commands == commands) return;
+        if (use->open && use->commands == commands)
+        {
+            if (std::find(impl->currentGeneration.begin(), impl->currentGeneration.end(), use) ==
+                impl->currentGeneration.end())
+                impl->currentGeneration.push_back(use);
+            return;
+        }
     auto use = std::make_shared<Impl::Recording>();
     use->commands = commands;
     if (impl->watchKeyValid)
@@ -144,6 +151,7 @@ void GpuLifetime::Record(ID3D12GraphicsCommandList* commands)
             watch->recording.reset(); // Failure must not pretend the recording was discarded.
         watch->Release();
     }
+    impl->currentGeneration.push_back(use);
     impl->recordings.push_back(std::move(use));
 }
 void GpuLifetime::Submitted(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists)
@@ -195,7 +203,13 @@ void GpuLifetime::ResetRecording(ID3D12CommandList* commands)
 void GpuLifetime::Retire(std::function<void()> destroy)
 {
     std::lock_guard lock(impl->mutex);
-    impl->retired.push_back({ impl->recordings, std::move(destroy) });
+    impl->retired.push_back({ impl->currentGeneration, std::move(destroy) });
+    Collect();
+}
+void GpuLifetime::BeginGeneration()
+{
+    std::lock_guard lock(impl->mutex);
+    impl->currentGeneration.clear();
     Collect();
 }
 void GpuLifetime::Collect()
@@ -218,6 +232,7 @@ void GpuLifetime::Collect()
             return true;
         });
         std::erase_if(impl->recordings, [](const auto& use) { return use->Complete(); });
+        std::erase_if(impl->currentGeneration, [](const auto& use) { return use->Complete(); });
         if (ready.empty()) break;
         // NGX destruction can re-enter queue/reset hooks and Retire. No callback may
         // run while a retired/recording vector is being compacted or iterated.

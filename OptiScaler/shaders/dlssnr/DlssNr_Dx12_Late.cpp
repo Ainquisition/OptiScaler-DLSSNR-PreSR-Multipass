@@ -20,10 +20,17 @@ auto DlssNr_Dx12::State::LateContext::Cancel() -> void
 {
     // Submitted copies may still be in flight; their fences still protect reuse.
     for (auto& slot : slots)
+    {
         if (slot.submitted)
             slot.pending = false;
         else if (slot.pending)
             slot.frame.OutputWidth = 0; // Invalidate presentation, retaining unsubmitted recording ownership.
+        // NR always resets these owned lists before recording another picture. Once cancelled,
+        // they cannot be replayed. Keep submitted fences, but do not pin later model generations
+        // to dormant presentation lists. The game's producer recording remains untouched.
+        if (slot.commands)
+            owner.FinishedPictureResetCommandList(slot.commands.Get());
+    }
     reset = true;
 }
 

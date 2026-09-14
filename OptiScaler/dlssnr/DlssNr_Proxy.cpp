@@ -113,6 +113,7 @@ void Context::Impl::RetireState()
     if (state.feature != nullptr || state.params != nullptr)
         lifetime.Retire([retired = state]() mutable { DestroyState(retired); });
     state = {};
+    lifetime.BeginGeneration();
 }
 
 void Context::Impl::TickRetired([[maybe_unused]] uint64_t epoch) { lifetime.Collect(); }

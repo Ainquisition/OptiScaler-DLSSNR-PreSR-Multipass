@@ -261,7 +261,69 @@ try
         expect(life.Idle() && callbacks == workers * cycles,
                "concurrent record/reset lost, duplicated or retained ownership");
     }
-    std::puts("NR GPU lifetime smoke passed (including concurrent record/reset/collection)");
+    {
+        // Leaving a presentation path must not make its dormant list a dependency of
+        // every later model rebuild. Old generations must still be safe to replay.
+        DlssNr::GpuLifetime life;
+        bool oldReleased = false;
+        unsigned replacementsReleased = 0;
+        life.Record(commands.Get());
+        queue->ExecuteCommandLists(1, lists);
+        life.Submitted(queue.Get(), 1, lists);
+        wait();
+        life.Retire([&] { oldReleased = true; });
+        life.BeginGeneration();
+        ComPtr<ID3D12CommandAllocator> localAllocator;
+        ComPtr<ID3D12GraphicsCommandList> work;
+        check(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&localAllocator)));
+        check(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, localAllocator.Get(), nullptr,
+                                        IID_PPV_ARGS(&work)));
+        check(work->Close());
+        ID3D12CommandList* replacementLists[] { work.Get() };
+        for (unsigned cycle = 0; cycle < 12; ++cycle)
+        {
+            check(localAllocator->Reset());
+            check(work->Reset(localAllocator.Get(), nullptr));
+            life.Record(work.Get());
+            check(work->Close());
+            queue->ExecuteCommandLists(1, replacementLists);
+            life.Submitted(queue.Get(), 1, replacementLists);
+            life.Retire([&] { ++replacementsReleased; });
+            life.Retire([&] { ++replacementsReleased; }); // multiple resources in one generation
+            life.BeginGeneration();
+            wait();
+            expect(replacementsReleased == cycle * 2, "replayable replacement freed prematurely");
+            life.ResetRecording(work.Get());
+            expect(replacementsReleased == (cycle + 1) * 2 && !oldReleased,
+                   "dormant old generation pinned unrelated replacements");
+        }
+        check(queue->Wait(gate.Get(), 5));
+        queue->ExecuteCommandLists(1, lists); // replay the original generation after newer ones retired
+        life.Submitted(queue.Get(), 1, lists);
+        life.ResetRecording(commands.Get()); // cancelled owned list, GPU work still pending
+        expect(!oldReleased, "generation boundary lost the old submission fence");
+        check(gate->Signal(5));
+        wait(); life.Collect();
+        expect(oldReleased && life.Idle(), "cancelled old generation did not drain");
+    }
+    {
+        // One recording may genuinely reference both old and new resources.
+        DlssNr::GpuLifetime life;
+        unsigned generationsReleased = 0;
+        life.Record(commands.Get());
+        life.Retire([&] { ++generationsReleased; });
+        life.BeginGeneration();
+        life.Record(commands.Get());
+        life.Retire([&] { ++generationsReleased; });
+        life.BeginGeneration();
+        queue->ExecuteCommandLists(1, lists);
+        life.Submitted(queue.Get(), 1, lists);
+        wait(); life.Collect();
+        expect(generationsReleased == 0, "shared recording lost a generation dependency");
+        life.ResetRecording(commands.Get());
+        expect(generationsReleased == 2 && life.Idle(), "shared generations did not retire");
+    }
+    std::puts("NR GPU lifetime smoke passed (including dormant and shared model generations)");
     return 0;
 }
 catch (const std::exception& e) { std::fprintf(stderr, "%s\n", e.what()); return 1; }
