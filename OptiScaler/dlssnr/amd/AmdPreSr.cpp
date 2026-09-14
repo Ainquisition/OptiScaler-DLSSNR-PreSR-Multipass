@@ -918,12 +918,25 @@ ID3D12Resource* Backend::Record(ID3D12GraphicsCommandList* cmd, const Frame& inc
         return nullptr;
     }
 }
+static bool SameCommandList(ID3D12CommandList* left, ID3D12CommandList* right)
+{
+    if (left == right)
+        return true;
+    if (!left || !right)
+        return false;
+
+    Microsoft::WRL::ComPtr<IUnknown> leftIdentity;
+    Microsoft::WRL::ComPtr<IUnknown> rightIdentity;
+    return SUCCEEDED(left->QueryInterface(IID_PPV_ARGS(&leftIdentity))) &&
+           SUCCEEDED(right->QueryInterface(IID_PPV_ARGS(&rightIdentity))) &&
+           leftIdentity.Get() == rightIdentity.Get();
+}
 int Backend::PendingListIndex(UINT count, ID3D12CommandList* const* lists) const
 {
     auto pending = p->pending.load(std::memory_order_acquire);
     if (!pending || !lists) return -1;
     for (UINT i = 0; i < count; ++i)
-        if (lists[i] == pending) return static_cast<int>(i);
+        if (SameCommandList(lists[i], pending)) return static_cast<int>(i);
     return -1;
 }
 void Backend::Submitting(ID3D12CommandQueue* queue, UINT n, ID3D12CommandList* const* lists)
@@ -933,7 +946,7 @@ void Backend::Submitting(ID3D12CommandQueue* queue, UINT n, ID3D12CommandList* c
         return;
     bool found = false;
     for (UINT i = 0; i < n; ++i)
-        found |= lists[i] == pending;
+        found |= SameCommandList(lists[i], pending);
     if (!found)
         return;
     std::lock_guard guard(p->lock);
@@ -974,7 +987,7 @@ void Backend::Submitted(ID3D12CommandQueue* queue, UINT n, ID3D12CommandList* co
         return;
     bool found = false;
     for (UINT i = 0; i < n; ++i)
-        found |= lists[i] == pending;
+        found |= SameCommandList(lists[i], pending);
     if (!found)
         return;
     std::lock_guard guard(p->lock);
