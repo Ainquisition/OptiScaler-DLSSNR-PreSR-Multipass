@@ -255,6 +255,7 @@ struct Backend::Impl
             return;
         }
         asyncSingle = false;
+
         pending.store(nullptr, std::memory_order_release);
         lastSubmitted = GetTickCount64();
         if (!failed && At<UINT>(runtime[0], 0x76c18) == observedTimeouts[0])
@@ -268,19 +269,18 @@ struct Backend::Impl
     {
         if (hipSet)
             return;
-        HMODULE hip = LoadLibraryExW(L"amdhip64_7.dll", nullptr, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-        if (!hip)
+        HMODULE hip = nullptr;
+        std::array<wchar_t, 32768> hipRoot {};
+        const DWORD rootLength = GetEnvironmentVariableW(L"HIP_PATH", hipRoot.data(),
+                                                          static_cast<DWORD>(hipRoot.size()));
+        if (rootLength > 0 && rootLength < hipRoot.size())
         {
-            std::array<wchar_t, 32768> hipRoot {};
-            const DWORD rootLength = GetEnvironmentVariableW(L"HIP_PATH", hipRoot.data(),
-                                                              static_cast<DWORD>(hipRoot.size()));
-            if (rootLength > 0 && rootLength < hipRoot.size())
-            {
-                const auto installed = std::filesystem::path(hipRoot.data()) / L"bin" / L"amdhip64_7.dll";
-                hip = LoadLibraryExW(installed.c_str(), nullptr,
-                                     LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-            }
+            const auto installed = std::filesystem::path(hipRoot.data()) / L"bin" / L"amdhip64_7.dll";
+            hip = LoadLibraryExW(installed.c_str(), nullptr,
+                                 LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
         }
+        if (!hip)
+            hip = LoadLibraryExW(L"amdhip64_7.dll", nullptr, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
         if (!hip)
         {
             // HIP SDK installs its runtime under ROCm\<version>\bin and adds that
@@ -468,9 +468,18 @@ ID3D12Resource* Backend::Record(ID3D12GraphicsCommandList* cmd, const Frame& inc
     }
     if (p->pending.load())
     {
-        if (++p->pendingSkips <= 3 || p->pendingSkips % 120 == 0)
-            p->Log("AMD skipped: previous neural submission still pending; count=" + std::to_string(p->pendingSkips));
-        return nullptr;
+        const UINT64 waitStart = GetTickCount64();
+        while (p->pending.load() && GetTickCount64() - waitStart < 100)
+        {
+            Sleep(1);
+            p->RetireSingle();
+        }
+        if (p->pending.load())
+        {
+            if (++p->pendingSkips <= 3 || p->pendingSkips % 120 == 0)
+                p->Log("AMD skipped: previous neural submission still pending after 100 ms; count=" + std::to_string(p->pendingSkips));
+            return nullptr;
+        }
     }
     const auto completion = p->completion.load();
     if (p->fence->GetCompletedValue() < completion)
@@ -490,6 +499,7 @@ ID3D12Resource* Backend::Record(ID3D12GraphicsCommandList* cmd, const Frame& inc
         if (++p->fenceRecoveries <= 3 || p->fenceRecoveries % 120 == 0)
             p->Log("AMD continuity: prior GPU work retired after short wait; count=" + std::to_string(p->fenceRecoveries));
     }
+
     bool timedOut = false;
     for (UINT i = 0; i < p->runtime.size(); ++i)
         if (auto h = p->runtime[i])
@@ -535,6 +545,10 @@ ID3D12Resource* Backend::Record(ID3D12GraphicsCommandList* cmd, const Frame& inc
         {
             p->Log("Input active=" + std::to_string(w) + "x" + std::to_string(h) + " colour=" + Layout(f.colour));
             p->Log("Input motion=" + Layout(f.motion) + " depth=" + Layout(f.depth));
+            p->Log("Input guides: motionScale=" + std::to_string(f.motionScaleX) +
+                   " x " + std::to_string(f.motionScaleY) +
+                   " depthInverted=" + std::to_string(f.depthInverted) +
+                   " gameReset=" + std::to_string(f.reset));
         }
         if (!w || !h || w > desc.Width || h > desc.Height || desc.SampleDesc.Count != 1 || desc.DepthOrArraySize != 1 ||
             desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D)
@@ -794,7 +808,10 @@ ID3D12Resource* Backend::Record(ID3D12GraphicsCommandList* cmd, const Frame& inc
                                      cfg.structure != p->lastSettings.structure || cfg.skin != p->lastSettings.skin;
         const bool explicitReset = p->resetRequested.exchange(false);
         const bool gap = p->lastSubmitted && GetTickCount64() - p->lastSubmitted > 250;
-        if (f.reset || resize || guideChange || passChange || p->resetAfterTimeout || settingsChanged || explicitReset || gap)
+        // Reset temporal history when the game or backend invalidates it.
+        const bool resetHistory = f.reset || resize || guideChange || passChange ||
+                                  p->resetAfterTimeout || settingsChanged || explicitReset || gap;
+        if (resetHistory)
             p->Log("AMD history reset: frame=" + std::to_string(p->frames) +
                    " game=" + std::to_string(f.reset) + " resize=" + std::to_string(resize) +
                    " guides=" + std::to_string(guideChange) + " passes=" + std::to_string(passChange) +
@@ -806,7 +823,7 @@ ID3D12Resource* Backend::Record(ID3D12GraphicsCommandList* cmd, const Frame& inc
             At<uint8_t>(r, 0x76e1d) = 1;
             // Engine +0x120 is the history-valid flag, +0x118 is the current
             // borrowed history view. Clear only at a quiescent frame boundary.
-            if (f.reset || resize || guideChange || passChange || p->resetAfterTimeout || settingsChanged || explicitReset || gap)
+            if (resetHistory)
             {
                 At<uint8_t>(r, 0x765f8) = 0;
                 At<void*>(r, 0x765f0) = nullptr;
@@ -820,9 +837,8 @@ ID3D12Resource* Backend::Record(ID3D12GraphicsCommandList* cmd, const Frame& inc
             At<UINT>(r, 0x76e40) = 1; // Enable native semantic character-mask channel.
             // The old shader ceiling expired at high render resolutions even
             // when inference finished well inside the native 600 ms watchdog.
-            // Scale the spin allowance with pixels, but retain a hard ceiling
-            // in the private shader if notification is lost. This is an
-            // iteration allowance, not a portable millisecond conversion.
+            // Diagnostic: use the private shader's maximum spin allowance.
+            // This is an iteration allowance, not a millisecond conversion.
             At<UINT>(r, 0x76c44) = static_cast<UINT>(std::clamp<UINT64>(
                 262144 + (UINT64(w) * h + 1) / 2, 262144, 2097152));
             Packet packet {};
@@ -843,6 +859,7 @@ ID3D12Resource* Backend::Record(ID3D12GraphicsCommandList* cmd, const Frame& inc
             // job 1 can follow job 1, so counter equality does not mean rejection.
             // The native pending-list pointer is the actual submission contract.
             const bool recorded = At<ID3D12CommandList*>(r, 0x76d68) == cmd;
+
             if (recorded)
             {
                 // Recreated staging restarts job IDs, but the mapped watchdog
@@ -1007,6 +1024,7 @@ void Backend::Submitted(ID3D12CommandQueue* queue, UINT n, ID3D12CommandList* co
             return;
         }
         p->completion.store(value);
+
         p->asyncStart = GetTickCount64();
         p->asyncSingle = true;
         return;

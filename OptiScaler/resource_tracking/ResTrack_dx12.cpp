@@ -654,8 +654,8 @@ void ResTrack_Dx12::hkExecuteCommandLists(ID3D12CommandQueue* This, UINT NumComm
     {
         DlssNr::AmdBridge::Submitting(This, count, lists);
         o_ExecuteCommandLists(This, count, lists);
-        DlssNr::FinishedPictureSubmitted(This, count, lists);
         DlssNr::AmdBridge::Submitted(This, count, lists);
+        DlssNr::FinishedPictureSubmitted(This, count, lists);
     };
     const auto executeWithAmdIsolation = [&]
     {

@@ -8,6 +8,7 @@
 #include <dlssnr/DlssNr_ExposureScan.h>
 #include <dlssnr/DlssNr_Pipeline_Dx12.h>
 #include <dlssnr/amd/AmdBridge.h>
+#include <resource_tracking/ResTrack_dx12.h>
 
 void IFeature_Dx12::ResourceBarrier(ID3D12GraphicsCommandList* InCommandList, ID3D12Resource* InResource,
                                     D3D12_RESOURCE_STATES InBeforeState, D3D12_RESOURCE_STATES InAfterState) const
@@ -33,6 +34,9 @@ bool IFeature_Dx12::Init(ID3D12Device* InDevice, ID3D12GraphicsCommandList* InCo
 
     if (result)
     {
+        if (DlssNr::AmdBridge::CanUse(InDevice))
+            ResTrack_Dx12::HookLateNrQueue(InDevice);
+
         if (!Config::Instance()->OverlayMenu.value_or_default() && (Imgui == nullptr || Imgui.get() == nullptr))
             Imgui = std::make_unique<Menu_Dx12>(Util::GetProcessWindow(), InDevice);
 
