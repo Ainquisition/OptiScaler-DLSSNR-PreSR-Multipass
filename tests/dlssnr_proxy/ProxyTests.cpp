@@ -47,6 +47,7 @@ DlssNr::GpuLifetime::~GpuLifetime() { Collect(); }
 void DlssNr::GpuLifetime::Record(ID3D12GraphicsCommandList*) { impl->pending = true; }
 void DlssNr::GpuLifetime::Submitted(ID3D12CommandQueue*, UINT, ID3D12CommandList* const*) {}
 void DlssNr::GpuLifetime::ResetRecording(ID3D12CommandList*) { impl->pending = false; Collect(); }
+void DlssNr::GpuLifetime::BeginGeneration() {} // Recording/fence generations are tested with the real helper.
 void DlssNr::GpuLifetime::Retire(std::function<void()> destroy)
 {
     impl->retired.push_back(std::move(destroy));
