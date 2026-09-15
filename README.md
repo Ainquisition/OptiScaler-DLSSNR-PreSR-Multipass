@@ -36,18 +36,92 @@
 </div>
 
 
-## Neural Rendering on this branch
+## AMD HIP pre-SR fork
 
-The [built-in RTX 40 MFG unlock](docs/RTX40-MFG.md) is an optional build feature, excluded by default and separate from the upstream NR proposal.
+> [!IMPORTANT]
+> This is an unofficial experimental fork of [wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass). It adds an AMD HIP backend for running DLSS Neural Rendering before the selected super-resolution implementation. It is not an official OptiScaler release.
 
-Experimental NR adds pre/post-upscale and finished-picture processing, multipass tuning,
-model resolution, HDR/exposure controls and separate edit upscaling. It defaults off and
-uses a separately supplied `nvngx_dlssnr.dll` through the NVIDIA driver; no NR helper DLL.
+### Status
 
-See [installation](INSTALL-DLSSNR.md), [controls](docs/NR-PIPELINE-UI.md),
-[game tests and limits](docs/NR-UPSTREAM-REVIEW.md), [implementation](OptiScaler/dlssnr/README.md)
-and [credits](docs/CREDITS.md). Official download links refer to upstream OptiScaler;
-these experimental features are proposed separately.
+The AMD path is functional on the tested configuration:
+
+- Windows 10
+- AMD Radeon RX 9070 XT
+- AMD ROCm/HIP 7.1
+- DirectX 12
+- Forza Horizon 6
+- one pre-SR neural pass
+- DLSS input with an OptiScaler output such as FSR 4.1.1 or DLSS
+
+D3D12 command submission, asynchronous retirement, history resets, dynamic NR resolution and recovery from rare HIP watchdog timeouts are implemented. The temporal flicker caused by alternating processed and skipped frames has been fixed.
+
+### Requirements
+
+- A compatible AMD Radeon GPU with a working HIP runtime
+- AMD ROCm/HIP 7.1; the backend prefers `%HIP_PATH%\bin\amdhip64_7.dll`
+- A DirectX 12 game exposing the resources required by the OptiScaler NR path
+- Compatible AMD neural runtime and model files:
+  - `dlssnr_amd_pass1.dll`
+  - `dlssnr_on_amd_weights.bin`
+
+The neural runtime DLL and model weights are not distributed by this repository.
+
+### Installation
+
+1. Build `OptiScaler.sln` for `Release | x64` with Visual Studio 2022.
+2. Copy `x64\Release\OptiScaler.dll` beside the game executable and rename it to the proxy name required by the game, commonly `dxgi.dll`.
+3. Copy `OptiScaler.ini`, `dlssnr_amd_pass1.dll`, `dlssnr_on_amd_weights.bin` and the required `OptiScaler` runtime directory beside the proxy DLL.
+4. Ensure `HIP_PATH` points to the installed ROCm directory, for example `C:\Program Files\AMD\ROCm\7.1`.
+5. Open the OptiScaler overlay with **Insert**, select the desired output upscaler and enable Neural Rendering.
+
+> [!CAUTION]
+> Do not use injection mods in online or anti-cheat protected games.
+
+### Recommended starting configuration
+
+```ini
+[DlssNr]
+Enabled=true
+RunBeforeSR=true
+FinishedPicture=false
+DeferredDLSS=false
+ResidualAcrossRR=false
+Passes=1
+WorkingScale=1.0
+ToggleKey=117
+```
+
+`ToggleKey=117` binds **F6** for quick NR on/off comparisons. Lowering `WorkingScale` reduces the neural processing resolution.
+
+### Controls and limitations
+
+- **Local Structure** is confirmed to work.
+- **Working Scale** is confirmed to change the NR processing resolution.
+- **Style** is fixed by the precompiled AMD kernels and currently has no effect.
+- **Intensity** is visible in the shared UI but is not yet applied by the AMD backend.
+- **Local Tone** appears unsupported by the current AMD runtime.
+- **Skin Structure** has not yet been verified with suitable character content.
+- The first activation may briefly stall while the HIP runtime initializes.
+- Rare HIP watchdog timeouts can still occur; the backend resets its history and retries automatically.
+
+### Logs
+
+For diagnostics, enable file logging in `OptiScaler.ini`:
+
+```ini
+LogToFile=true
+LogLevel=2
+```
+
+The main diagnostic files are `OptiScaler.log`, `amd_bridge.log` and `amd_presr.log`.
+
+### Building
+
+Clone the repository with all submodules and build `OptiScaler.sln` using Visual Studio 2022. The Windows SDK, MSVC x64 libraries and Vulkan import library must be available to the linker.
+
+The optional [RTX 40 MFG unlock](docs/RTX40-MFG.md) remains separate and is excluded by default.
+
+See the original [NR installation notes](INSTALL-DLSSNR.md), [controls](docs/NR-PIPELINE-UI.md), [implementation notes](OptiScaler/dlssnr/README.md) and [credits](docs/CREDITS.md).
 
 ## About
 
