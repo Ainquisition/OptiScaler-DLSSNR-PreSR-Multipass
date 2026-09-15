@@ -84,33 +84,32 @@ static bool InheritedProfileCombo(const char* label, CustomOptional<uint32_t, No
 
 void RenderModel(Config* config, float menuResScale)
 {
-    // Keep the UI simple; advanced INI pass settings remain available.
-    constexpr int menuPassLimit = 2;
+    bool unlockPasses = config->DlssNrUnlockPasses.value_or_default();
+    const int menuPassLimit = unlockPasses ? 10 : 2;
     {
-        int passes = (int) std::clamp(config->DlssNrPasses.value_or_default(), 1u, (unsigned int) menuPassLimit);
+        static int passes = 1;
+        static bool editingPasses = false;
+        if (!editingPasses)
+            passes = (int) std::clamp(config->DlssNrPasses.value_or_default(), 1u, (unsigned int) menuPassLimit);
+
         const auto text = ImGui::GetStyleColorVec4(ImGuiCol_Text);
         const float brightness = std::max({ text.x, text.y, text.z });
-        const auto passColour = [&](int count)
-        {
-            return count == 1 ? ImVec4(brightness * 0.35f, brightness * 0.75f, brightness * 0.45f, text.w)
-                              : ImVec4(brightness * 0.80f, brightness * 0.35f, brightness * 0.32f, text.w);
-        };
-        ImGui::PushStyleColor(ImGuiCol_Text, passColour(passes));
-        const bool open = ImGui::BeginCombo("##Model passes", passes == 1 ? "1" : "2");
+        const auto colour = passes == 1
+                                ? ImVec4(brightness * 0.35f, brightness * 0.75f, brightness * 0.45f, text.w)
+                                : ImVec4(brightness * 0.80f, brightness * 0.35f, brightness * 0.32f, text.w);
+        ImGui::PushStyleColor(ImGuiCol_Text, colour);
+        ImGui::SliderInt("##Model passes", &passes, 1, menuPassLimit, "%d", ImGuiSliderFlags_AlwaysClamp);
+        editingPasses = ImGui::IsItemActive();
+        if (ImGui::IsItemDeactivatedAfterEdit())
+            config->DlssNrPasses = (uint32_t) std::clamp(passes, 1, menuPassLimit);
         ImGui::PopStyleColor();
-        if (open)
-        {
-            for (int count = 1; count <= menuPassLimit; ++count)
-            {
-                ImGui::PushStyleColor(ImGuiCol_Text, passColour(count));
-                if (ImGui::Selectable(count == 1 ? "1" : "2", passes == count))
-                    config->DlssNrPasses = (uint32_t) count;
-                ImGui::PopStyleColor();
-            }
-            ImGui::EndCombo();
-        }
         ImGui::SameLine();
         ImGui::TextUnformatted("Model passes");
+    }
+    if (ImGui::Checkbox("Unlock up to 10 passes", &unlockPasses))
+    {
+        config->DlssNrUnlockPasses = unlockPasses;
+        config->DlssNrPasses = std::clamp(config->DlssNrPasses.value_or_default(), 1u, unlockPasses ? 10u : 2u);
     }
 
     static const char* styles[] = { "Standard", "Natural", "Cinematic" };
