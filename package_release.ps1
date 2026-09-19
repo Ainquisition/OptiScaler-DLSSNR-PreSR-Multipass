@@ -60,6 +60,7 @@ $files['Licenses/FidelityFX_v2_LICENSE.md'] = Join-Path $root 'external/Fidelity
 $files['Licenses/DirectX_LICENSE.txt'] = Join-Path $root 'external/directx_agility_sdk/LICENSE.txt'
 $files['Licenses/RenoDX_ATTRIBUTION.txt'] = Join-Path $root 'Licenses/RenoDX_ATTRIBUTION.txt'
 foreach ($name in @('CREDITS.md', 'NR-COMPATIBILITY.md', 'NR-MOTION-METADATA.md', 'NR-PIPELINE-UI.md', 'NR-FINISHED-BRIDGES.md', 'PADDED-PRESR.md',
+                    'AMD-HIP-PRESR.md',
                     'DEFERRED-NR-DLSS.md', 'RESIDUAL-ACROSS-RR.md', 'COMPATIBILITY-CHANGES.md',
                     'NR-DLSS-ENLARGEMENT.md', 'NR-GPU-RETIREMENT.md', 'NR-NATIVE-STREAMLINE-PRESENT.md',
                     'NR-PRIVATE-RR.md', 'NR-VULKAN.md', 'NR-PHOTO-DIAGNOSTIC.md',

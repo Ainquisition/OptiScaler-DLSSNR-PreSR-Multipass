@@ -49,6 +49,9 @@ See [installation](INSTALL-DLSSNR.md), [controls](docs/NR-PIPELINE-UI.md),
 and [credits](docs/CREDITS.md). Official download links refer to upstream OptiScaler;
 these experimental features are proposed separately.
 
+AMD GPUs can use the optional HIP pre-SR backend when its separately supplied runtime and model files are present.
+The NVIDIA path remains unchanged. See [AMD HIP pre-SR](docs/AMD-HIP-PRESR.md) for requirements and limits.
+
 ## About
 
 **OptiScaler** is a tool that lets you replace upscalers in games that ***already support DLSS2+ / FSR2+ / XeSS*** ($`^1`$), as well as manage ***frame generation*** in already mentioned games _(either by replacing existing FG options or enabling it in DX12 games through experimental ***OptiFG***)_. It also offers extensive customization options for all users, including those with Nvidia GPUs using DLSS.
