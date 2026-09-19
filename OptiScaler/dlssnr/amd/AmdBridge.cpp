@@ -2,6 +2,7 @@
 
 #include "AmdBridge.h"
 #include "AmdPreSr.h"
+#include "AmdPrerequisites.h"
 
 #include <Config.h>
 #include <State.h>
@@ -24,6 +25,7 @@ std::mutex initMutex;
 std::mutex frameMutex;
 std::mutex messageMutex;
 std::string message = "AMD pre-SR: waiting for a DirectX 12 SR frame";
+std::string prerequisiteError;
 
 struct FrameIdentity
 {
@@ -47,6 +49,21 @@ void Message(const char* text)
         log << GetTickCount64() << " thread=" << GetCurrentThreadId() << " " << text << '\n';
     }
     message = text;
+}
+
+void ReportPrerequisite(std::string error)
+{
+    std::lock_guard lock(messageMutex);
+    if (prerequisiteError == error)
+        return;
+
+    prerequisiteError = std::move(error);
+    if (!prerequisiteError.empty())
+    {
+        std::ofstream log(Directory() / L"amd_bridge.log", std::ios::app);
+        log << GetTickCount64() << " thread=" << GetCurrentThreadId() << " " << prerequisiteError << '\n';
+        LOG_ERROR("{}", prerequisiteError);
+    }
 }
 
 ID3D12Resource* Resource(NVSDK_NGX_Parameter* parameters, const char* name)
@@ -109,7 +126,7 @@ bool HasFiles()
 
 bool CanUse(ID3D12Device* device)
 {
-    if (!device || !HasFiles())
+    if (!device)
         return false;
 
     static std::mutex cacheMutex;
@@ -124,7 +141,24 @@ bool CanUse(ID3D12Device* device)
         cachedResult = IsAmd(device);
         cached = true;
     }
-    return cachedResult;
+    if (!cachedResult)
+    {
+        ReportPrerequisite({});
+        return false;
+    }
+
+    const auto* config = Config::Instance();
+    ReportPrerequisite(config->DlssNrEnabled.value_or_default() &&
+                               config->DlssNrRunBeforeSr.value_or_default()
+                           ? MissingPrerequisite(Directory())
+                           : std::string {});
+    return HasFiles();
+}
+
+std::string PrerequisiteError()
+{
+    std::lock_guard lock(messageMutex);
+    return prerequisiteError;
 }
 
 ID3D12Resource* Prepare(ID3D12GraphicsCommandList* commandList, NVSDK_NGX_Parameter* parameters,

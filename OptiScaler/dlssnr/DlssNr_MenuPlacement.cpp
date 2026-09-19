@@ -7,6 +7,7 @@
 #include "DlssNr_Placement.h"
 #include "DlssNr_PipelineUi.h"
 #include <Config.h>
+#include <dlssnr/amd/AmdBridge.h>
 #include <menu/menu_common.h>
 
 namespace DlssNr::MenuSections
@@ -50,6 +51,9 @@ void RenderStatus(Config* config, float menuResScale)
     // is never touched -- so asking only that one reports "waiting for the upscaler" over a pass
     // that is demonstrably running.
     const bool vulkan = DlssNr::IsRunningVk();
+    const auto amdPrerequisite = config->DlssNrRunBeforeSr.value_or_default()
+                                     ? AmdBridge::PrerequisiteError()
+                                     : std::string {};
 
     // Turning the pass off does not release the model, so the feature handle stays alive and
     // IsRunning keeps answering yes. Reporting a cost from that was wrong in the way that matters
@@ -58,6 +62,10 @@ void RenderStatus(Config* config, float menuResScale)
     if (!enabled)
     {
         ImGui::TextDisabled("NR off.");
+    }
+    else if (!amdPrerequisite.empty())
+    {
+        ImGui::TextWrapped("%s", amdPrerequisite.c_str());
     }
     else if (!DlssNr::IsRunning() && !vulkan)
     {

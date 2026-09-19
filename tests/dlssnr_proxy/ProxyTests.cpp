@@ -1,8 +1,12 @@
 // Compile the production backend with mock NGX entry points and the real SDK parameter interface.
 #include "../../OptiScaler/dlssnr/DlssNr_Proxy.cpp"
 #include "../../OptiScaler/dlssnr/DlssNr_Status.cpp"
+#include "../../OptiScaler/dlssnr/amd/AmdPrerequisites.h"
 #include "../../OptiScaler/upscalers/ShaderPipeline_Dx12.h"
 #include "../../OptiScaler/dlssnr/DlssNr_HoldParameters_Dx12.h"
+
+#include <filesystem>
+#include <fstream>
 
 namespace DlssNr::NgxDiagnostics
 {
@@ -72,6 +76,19 @@ struct Dx11Parameters : Mock::Params
 
 int main()
 {
+    const auto prerequisites = std::filesystem::temp_directory_path() / L"optiscaler-amd-prerequisites-test";
+    std::error_code filesystemError;
+    std::filesystem::remove_all(prerequisites, filesystemError);
+    assert(std::filesystem::create_directory(prerequisites));
+    assert(DlssNr::AmdBridge::MissingPrerequisite(prerequisites) ==
+           "AMD pre-SR unavailable: missing dlssnr_amd_pass1.dll");
+    std::ofstream(prerequisites / L"dlssnr_amd_pass1.dll").put('\0');
+    assert(DlssNr::AmdBridge::MissingPrerequisite(prerequisites) ==
+           "AMD pre-SR unavailable: missing dlssnr_on_amd_weights.bin");
+    std::ofstream(prerequisites / L"dlssnr_on_amd_weights.bin").put('\0');
+    assert(DlssNr::AmdBridge::MissingPrerequisite(prerequisites).empty());
+    std::filesystem::remove_all(prerequisites, filesystemError);
+
     DlssNr::Proxy::Context proxy;
     ID3D12Device device;
     ID3D12GraphicsCommandList commands;
