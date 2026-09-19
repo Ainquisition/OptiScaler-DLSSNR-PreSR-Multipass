@@ -192,6 +192,8 @@ ID3D12Resource* Prepare(ID3D12GraphicsCommandList* commandList, NVSDK_NGX_Parame
     if (current.width != lastFrame.width || current.height != lastFrame.height || current.scale != lastFrame.scale)
     {
         lastFrame = current;
+        stableFrames = 0;
+        settlingSince = now;
         owner->InvalidateHistory();
     }
     if (settlingSince == 0)
