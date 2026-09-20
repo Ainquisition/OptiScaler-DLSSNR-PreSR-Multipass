@@ -2,6 +2,7 @@
 #include "../../OptiScaler/dlssnr/DlssNr_Proxy.cpp"
 #include "../../OptiScaler/dlssnr/DlssNr_Status.cpp"
 #include "../../OptiScaler/dlssnr/amd/AmdPrerequisites.h"
+#include "../../OptiScaler/dlssnr/amd/RuntimeHash.h"
 #include "../../OptiScaler/upscalers/ShaderPipeline_Dx12.h"
 #include "../../OptiScaler/dlssnr/DlssNr_HoldParameters_Dx12.h"
 
@@ -76,6 +77,24 @@ struct Dx11Parameters : Mock::Params
 
 int main()
 {
+    using AmdPreSr::RuntimeIdentity;
+    assert(AmdPreSr::IdentifyRuntime(7156224, AmdPreSr::V0214PatchedSha256.data()) ==
+           RuntimeIdentity::ProductionV0214);
+    assert(AmdPreSr::IdentifyRuntime(7304192, AmdPreSr::V031OfficialSha256.data()) ==
+           RuntimeIdentity::OfficialV031NeedsPatching);
+    assert(AmdPreSr::IdentifyRuntime(7304192, AmdPreSr::V031PatchedSha256.data()) ==
+           RuntimeIdentity::ExperimentalV031);
+    auto wrongHash = AmdPreSr::V031PatchedSha256;
+    wrongHash[0] ^= 0xff;
+    assert(AmdPreSr::IdentifyRuntime(7304192, wrongHash.data()) == RuntimeIdentity::Unknown);
+    assert(AmdPreSr::ContractFor(RuntimeIdentity::OfficialV031NeedsPatching) == nullptr);
+    const auto* v031 = AmdPreSr::ContractFor(RuntimeIdentity::ExperimentalV031);
+    assert(v031 && v031->singlePassOnly && v031->packetSize == 0x60 && v031->record == 0x13540 &&
+           v031->notify == 0x9720 && v031->shutdown == 0x17150);
+    assert(!AmdPreSr::RecordAccepted(RuntimeIdentity::ExperimentalV031, false, true));
+    assert(AmdPreSr::RecordAccepted(RuntimeIdentity::ExperimentalV031, true, true));
+    assert(!AmdPreSr::RecordAccepted(RuntimeIdentity::ExperimentalV031, true, false));
+
     const auto prerequisites = std::filesystem::temp_directory_path() / L"optiscaler-amd-prerequisites-test";
     std::error_code filesystemError;
     std::filesystem::remove_all(prerequisites, filesystemError);

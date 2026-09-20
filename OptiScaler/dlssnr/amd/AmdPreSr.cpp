@@ -49,11 +49,16 @@ struct Packet
     ID3D12Resource* exposure;
     UINT exposureState;
     float scaleX, scaleY;
-    UINT pad4c;
+    uint8_t pre;
+    uint8_t pad4d[3];
+    UINT renderWidth, renderHeight;
+    float jitterX, jitterY;
 };
-static_assert(sizeof(Packet) == 0x50 && offsetof(Packet, scaleX) == 0x44);
+static_assert(sizeof(Packet) == 0x60 && offsetof(Packet, scaleX) == 0x44 && offsetof(Packet, pre) == 0x4c &&
+              offsetof(Packet, jitterY) == 0x5c);
 using InitFn = bool(__fastcall*)(void*, const std::string*);
-using RecordFn = void(__fastcall*)(Packet*);
+using LegacyRecordFn = void(__fastcall*)(Packet*);
+using RecordFn = bool(__fastcall*)(Packet*);
 using NotifyFn = void(__fastcall*)(ID3D12CommandQueue*, UINT, ID3D12CommandList* const*);
 using HipSetFn = int (*)(int);
 constexpr char CopyShader[] = R"(
@@ -159,19 +164,17 @@ std::string Layout(ID3D12Resource* resource)
            " flags=" + std::to_string(d.Flags) + " samples=" + std::to_string(d.SampleDesc.Count) +
            " array=" + std::to_string(d.DepthOrArraySize) + " dimension=" + std::to_string(d.Dimension);
 }
-bool HashMatches(const std::filesystem::path& file)
+RuntimeIdentity RuntimeIdentityFor(const std::filesystem::path& file)
 {
     std::ifstream in(file, std::ios::binary);
     std::vector<unsigned char> data((std::istreambuf_iterator<char>(in)), {});
-    if (data.size() != 7156224)
-        return false;
     BCRYPT_ALG_HANDLE alg {};
     unsigned char digest[32] {};
     if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0)
-        return false;
+        return RuntimeIdentity::Unknown;
     auto result = BCryptHash(alg, nullptr, 0, data.data(), static_cast<ULONG>(data.size()), digest, 32);
     BCryptCloseAlgorithmProvider(alg, 0);
-    return result >= 0 && std::memcmp(digest, AmdRuntimeSha256, 32) == 0;
+    return result >= 0 ? IdentifyRuntime(data.size(), digest) : RuntimeIdentity::Unknown;
 }
 DXGI_FORMAT ReadFormat(DXGI_FORMAT f)
 {
@@ -209,6 +212,7 @@ struct Backend::Impl
     UINT lastInputWidth=0,lastInputHeight=0;
     bool hadExposure = false;
     std::array<HMODULE, 3> runtime {};
+    const RuntimeContract* contract = nullptr;
     std::array<UINT, 3> jobs {};
     std::array<UINT, 3> observedTimeouts {};
     std::filesystem::path directory;
@@ -257,9 +261,9 @@ struct Backend::Impl
     {
         auto h = runtime[0];
         const UINT nativeDone = h ? static_cast<UINT>(InterlockedCompareExchange(
-            reinterpret_cast<volatile LONG*>(&At<UINT>(h, 0x76c14)), 0, 0)) : 0;
+            reinterpret_cast<volatile LONG*>(&At<UINT>(h, contract->completedJob)), 0, 0)) : 0;
         const UINT timeouts = h ? static_cast<UINT>(InterlockedCompareExchange(
-            reinterpret_cast<volatile LONG*>(&At<UINT>(h, 0x76c18)), 0, 0)) : 0;
+            reinterpret_cast<volatile LONG*>(&At<UINT>(h, contract->timeoutCounter)), 0, 0)) : 0;
         const UINT64 fenceTarget = completion.load();
         const UINT64 fenceDone = fence ? fence->GetCompletedValue() : 0;
         AppendLog("AMD timeout telemetry: event=" + std::string(event) +
@@ -299,7 +303,7 @@ struct Backend::Impl
         if (!asyncSingle) return;
         const UINT64 now = GetTickCount64();
         auto done = static_cast<UINT>(InterlockedCompareExchange(
-            reinterpret_cast<volatile LONG*>(&At<UINT>(runtime[0], 0x76c14)), 0, 0));
+            reinterpret_cast<volatile LONG*>(&At<UINT>(runtime[0], contract->completedJob)), 0, 0));
         const UINT64 fenceTarget = completion.load();
         const UINT64 fenceDone = fence->GetCompletedValue();
         if (!telemetryNativeCompleted && done >= jobs[0]) telemetryNativeCompleted = now;
@@ -323,7 +327,7 @@ struct Backend::Impl
         const bool longPending = telemetryPendingLogged;
         if (longPending)
             LogSingleTelemetry("long-pending-retired", now);
-        if (!failed && At<UINT>(runtime[0], 0x76c18) == observedTimeouts[0])
+        if (!failed && At<UINT>(runtime[0], contract->timeoutCounter) == observedTimeouts[0])
         {
             if (!telemetryBaselineLogged && !longPending)
             {
@@ -404,8 +408,18 @@ struct Backend::Impl
             return;
         InitHip();
         auto path = directory / (L"dlssnr_amd_pass" + std::to_wstring(i + 1) + L".dll");
-        if (!HashMatches(path))
+        const auto identity = RuntimeIdentityFor(path);
+        if (identity == RuntimeIdentity::OfficialV031NeedsPatching)
+            throw std::runtime_error("Official AMD runtime v0.3.1 requires the two approved patches before loading");
+        const auto* nextContract = ContractFor(identity);
+        if (!nextContract)
             throw std::runtime_error("Private AMD runtime hash mismatch: pass " + std::to_string(i + 1));
+        if (contract && contract != nextContract)
+            throw std::runtime_error("Mixed AMD runtime versions are not supported");
+        if (i && nextContract->singlePassOnly)
+            throw std::runtime_error("AMD runtime v0.3.1 experiment supports Pass 1 only");
+        contract = nextContract;
+        const auto& c = *contract;
         auto weights = directory / L"dlssnr_on_amd_weights.bin";
         if (!std::filesystem::exists(weights))
             throw std::runtime_error("dlssnr_on_amd_weights.bin is required");
@@ -418,45 +432,46 @@ struct Backend::Impl
                            reinterpret_cast<LPCWSTR>(h), &pinned);
         // Retain module even on failure: CRT registered HIP kernels; no unsafe unloading.
         runtime[i] = h;
-        // The hash above fixes this private module's import layout. Older games
-        // ship a 2013 D3DCompiler that rejects the FP16 typed UAV load shader.
-        // Bind only this module's compiler import; leave the game's DLL intact.
-        static HMODULE systemCompiler = [] {
-            wchar_t systemPath[MAX_PATH] {};
-            auto length = GetSystemDirectoryW(systemPath, MAX_PATH);
-            if (!length || length >= MAX_PATH) return HMODULE(nullptr);
-            auto path = std::filesystem::path(systemPath) / L"d3dcompiler_47.dll";
-            return LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-        }();
-        auto compile = systemCompiler ? GetProcAddress(systemCompiler, "D3DCompile") : nullptr;
-        if (!compile) throw std::runtime_error("System D3DCompile unavailable for AMD neural shaders");
-        auto import = reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(h) + 0x6bb50);
-        DWORD previousProtection = 0;
-        if (!VirtualProtect(import, sizeof(void*), PAGE_READWRITE, &previousProtection))
-            throw std::runtime_error("Could not bind private AMD shader compiler");
-        InterlockedExchangePointer(import, reinterpret_cast<void*>(compile));
-        DWORD unused = 0;
-        if (!VirtualProtect(import, sizeof(void*), previousProtection, &unused))
-            throw std::runtime_error("Could not restore private AMD import protection");
-        Log("Private AMD shaders use System32 D3DCompiler; game compiler preserved");
+        if (c.compilerImportPatch)
+        {
+            // The pinned v0.2.14 module imports D3DCompile. v0.3.1 does not.
+            static HMODULE systemCompiler = [] {
+                wchar_t systemPath[MAX_PATH] {};
+                auto length = GetSystemDirectoryW(systemPath, MAX_PATH);
+                if (!length || length >= MAX_PATH) return HMODULE(nullptr);
+                auto path = std::filesystem::path(systemPath) / L"d3dcompiler_47.dll";
+                return LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+            }();
+            auto compile = systemCompiler ? GetProcAddress(systemCompiler, "D3DCompile") : nullptr;
+            if (!compile) throw std::runtime_error("System D3DCompile unavailable for AMD neural shaders");
+            auto import = reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(h) + c.compilerImport);
+            DWORD previousProtection = 0;
+            if (!VirtualProtect(import, sizeof(void*), PAGE_READWRITE, &previousProtection))
+                throw std::runtime_error("Could not bind private AMD shader compiler");
+            InterlockedExchangePointer(import, reinterpret_cast<void*>(compile));
+            DWORD unused = 0;
+            if (!VirtualProtect(import, sizeof(void*), previousProtection, &unused))
+                throw std::runtime_error("Could not restore private AMD import protection");
+            Log("Private AMD shaders use System32 D3DCompiler; game compiler preserved");
+        }
 
-        At<ID3D12Device*>(h, 0x764c8) = device.Get();
+        At<ID3D12Device*>(h, c.device) = device.Get();
         device->AddRef();
-        At<ID3D12CommandQueue*>(h, 0x764d0) = queue.Get();
+        At<ID3D12CommandQueue*>(h, c.queue) = queue.Get();
         queue->AddRef();
-        At<int>(h, 0x76f20) = hipDevice;
-        At<uint8_t>(h, 0x76be0) = 1; // configured inline; 0x76be1 is staging state
-        At<uint8_t>(h, 0x76c8c) = 1; // external-memory interop
-        At<uint8_t>(h, 0x76e1c) = 1; // enabled
-        At<uint8_t>(h, 0x76e1e) = 1; // FSR inputs, no swapchain fallback
-        At<uint8_t>(h, 0x76e1f) = 1; // depth
-        At<int>(h, 0x76e20) = -1;    // auto tonemap by input format
+        At<int>(h, c.hipDevice) = hipDevice;
+        At<uint8_t>(h, c.inlineMode) = 1;
+        At<uint8_t>(h, c.interop) = 1;
+        At<uint8_t>(h, c.enabled) = 1;
+        At<uint8_t>(h, c.useFsrInputs) = 1;
+        At<uint8_t>(h, c.useDepth) = 1;
+        At<int>(h, c.tonemap) = -1;
         std::string file = weights.string();
-        if (hipSet(hipDevice) != 0 || !reinterpret_cast<InitFn>(reinterpret_cast<uintptr_t>(h) + 0x12380)(
-                                          reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(h) + 0x764d8), &file))
+        if (hipSet(hipDevice) != 0 || !reinterpret_cast<InitFn>(reinterpret_cast<uintptr_t>(h) + c.init)(
+                                          reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(h) + c.engine), &file))
             throw std::runtime_error("AMD engine initialization failed");
-        At<uint8_t>(h, 0x767f8) = 1;
-        Log("Initialized independent AMD pass " + std::to_string(i + 1));
+        At<uint8_t>(h, c.ready) = 1;
+        Log("Initialized AMD " + std::string(c.version) + " pass " + std::to_string(i + 1));
     }
     void InitShader()
     {
@@ -580,8 +595,8 @@ ID3D12Resource* Backend::Record(ID3D12GraphicsCommandList* cmd, const Frame& inc
     for (UINT i = 0; i < p->runtime.size(); ++i)
         if (auto h = p->runtime[i])
         {
-            UINT count = static_cast<UINT>(
-                InterlockedCompareExchange(reinterpret_cast<volatile LONG*>(&At<UINT>(h, 0x76c18)), 0, 0));
+            UINT count = static_cast<UINT>(InterlockedCompareExchange(
+                reinterpret_cast<volatile LONG*>(&At<UINT>(h, p->contract->timeoutCounter)), 0, 0));
             if (count > p->observedTimeouts[i])
             {
                 p->timeoutEvents += count - p->observedTimeouts[i];
@@ -680,18 +695,24 @@ ID3D12Resource* Backend::Record(ID3D12GraphicsCommandList* cmd, const Frame& inc
         if (f.motion->GetDesc().Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)
             throw std::runtime_error("Unsupported depth-stencil motion buffer: " + Layout(f.motion));
         const UINT configuredPasses = std::clamp(cfg.passes, 1u, 3u);
-        if (!p->availablePasses)
+        p->InitPass(0);
+        if (p->contract->singlePassOnly)
+            p->availablePasses = 1;
+        else if (!p->availablePasses)
             p->availablePasses = DlssNr::AmdBridge::ContiguousPassFileCount(p->directory, 3);
         p->activePasses = (std::min)(configuredPasses, p->availablePasses);
         bool passChange = p->lastPasses != p->activePasses;
         if (p->activePasses < configuredPasses &&
             (p->lastConfiguredPasses != configuredPasses || passChange))
-            p->Log("AMD pre-SR: configured passes=" + std::to_string(configuredPasses) +
-                   ", effective passes=" + std::to_string(p->activePasses) + "; missing dlssnr_amd_pass" +
-                   std::to_string(p->activePasses + 1) + ".dll");
+            p->Log(p->contract->singlePassOnly
+                       ? "AMD v0.3.1 experiment: configured passes=" + std::to_string(configuredPasses) +
+                             ", effective passes=1; single-pass only"
+                       : "AMD pre-SR: configured passes=" + std::to_string(configuredPasses) +
+                             ", effective passes=" + std::to_string(p->activePasses) + "; missing dlssnr_amd_pass" +
+                             std::to_string(p->activePasses + 1) + ".dll");
         p->lastConfiguredPasses = configuredPasses;
         p->lastPasses = p->activePasses;
-        for (UINT i = 0; i < p->activePasses; ++i)
+        for (UINT i = 1; i < p->activePasses; ++i)
             p->InitPass(i);
         p->InitShader();
         bool resize = p->width != w || p->height != h;
@@ -907,27 +928,29 @@ ID3D12Resource* Backend::Record(ID3D12GraphicsCommandList* cmd, const Frame& inc
         for (UINT i = 0; i < p->activePasses; ++i)
         {
             auto r = p->runtime[i];
-            At<uint8_t>(r, 0x76e1d) = 1;
+            const auto& c = *p->contract;
+            At<uint8_t>(r, c.temporal) = 1;
             // Engine +0x120 is the history-valid flag, +0x118 is the current
             // borrowed history view. Clear only at a quiescent frame boundary.
             if (resetHistory)
             {
-                At<uint8_t>(r, 0x765f8) = 0;
-                At<void*>(r, 0x765f0) = nullptr;
+                At<uint8_t>(r, c.historyValid) = 0;
+                At<void*>(r, c.history) = nullptr;
             }
-            At<UINT>(r, 0x76e10) = f.depthInverted;
-            At<uint8_t>(r, 0x76e14) = 1; // explicit depth convention, no heuristic
-            At<float>(r, 0x76e30) = i == 0 ? cfg.tone : 0;
-            At<float>(r, 0x76e34) = cfg.structure;
-            At<float>(r, 0x76e38) = cfg.skin;
-            At<UINT>(r,0x76e44)=cfg.toneChannels?1u:0u;
-            At<UINT>(r, 0x76e40) = 1; // Enable native semantic character-mask channel.
+            At<UINT>(r, c.depthInverted) = f.depthInverted;
+            At<uint8_t>(r, c.depthConvention) = 1;
+            At<float>(r, c.localTone) = i == 0 ? cfg.tone : 0;
+            At<float>(r, c.localStructure) = cfg.structure;
+            At<float>(r, c.skinStructure) = cfg.skin;
+            At<UINT>(r, c.toneChannels) = cfg.toneChannels ? 1u : 0u;
+            At<UINT>(r, c.autoMask) = 1;
             // The old shader ceiling expired at high render resolutions even
             // when inference finished well inside the native 600 ms watchdog.
             // Diagnostic: use the private shader's maximum spin allowance.
             // This is an iteration allowance, not a millisecond conversion.
-            At<UINT>(r, 0x76c44) = static_cast<UINT>(std::clamp<UINT64>(
-                262144 + (UINT64(w) * h + 1) / 2, 262144, 2097152));
+            if (c.spinCap)
+                At<UINT>(r, c.spinLimit) = static_cast<UINT>(std::clamp<UINT64>(
+                    262144 + (UINT64(w) * h + 1) / 2, 262144, 2097152));
             Packet packet {};
             packet.list = cmd;
             packet.colour = p->colour.Get();
@@ -940,12 +963,22 @@ ID3D12Resource* Backend::Record(ID3D12GraphicsCommandList* cmd, const Frame& inc
             packet.exposureState = 4;
             packet.scaleX = f.motionScaleX * (resampleMotion ? float(w) / mvW : 1.0f);
             packet.scaleY = f.motionScaleY * (resampleMotion ? float(h) / mvH : 1.0f);
-            reinterpret_cast<RecordFn>(reinterpret_cast<uintptr_t>(r) + 0xa0b0)(&packet);
-            p->jobs[i] = At<UINT>(r, 0x76d74);
+            packet.pre = 0;
+            packet.renderWidth = packet.renderHeight = 0;
+            packet.jitterX = packet.jitterY = 0;
+            bool recordResult = true;
+            if (c.identity == RuntimeIdentity::ExperimentalV031)
+                recordResult = reinterpret_cast<RecordFn>(reinterpret_cast<uintptr_t>(r) + c.record)(&packet);
+            else
+                reinterpret_cast<LegacyRecordFn>(reinterpret_cast<uintptr_t>(r) + c.record)(&packet);
+            p->jobs[i] = At<UINT>(r, c.expectedJob);
             // Staging recreation resets the native job counter. After a resize,
             // job 1 can follow job 1, so counter equality does not mean rejection.
             // The native pending-list pointer is the actual submission contract.
-            const bool recorded = At<ID3D12CommandList*>(r, 0x76d68) == cmd;
+            const bool pendingRecorded = At<ID3D12CommandList*>(r, c.pendingList) == cmd;
+            const bool recorded = RecordAccepted(c.identity, recordResult, pendingRecorded);
+            if (!recordResult && pendingRecorded)
+                At<ID3D12CommandList*>(r, c.pendingList) = nullptr;
 
             if (recorded)
             {
@@ -954,18 +987,19 @@ ID3D12Resource* Backend::Record(ID3D12GraphicsCommandList* cmd, const Frame& inc
                 // At this point the preceding GPU fence and HIP job have retired,
                 // and this list has not been submitted. Clear the obsolete abort
                 // token; the watchdog remains active once Notify publishes this job.
-                if (auto abortWord = At<volatile LONG*>(r, 0x76c68))
+                if (auto abortWord = At<volatile LONG*>(r, c.abortPointer))
                     InterlockedExchange(abortWord, 0);
                 ++accepted;
             }
-            if (At<uint8_t>(r, 0x767fa) || !recorded)
+            if (At<uint8_t>(r, c.nativeFailure) || !recorded)
             {
                 p->failed = true;
                 p->Log("AMD pass rejected frame: " + std::to_string(i + 1) + " job=" + std::to_string(p->jobs[i]) +
-                       " pending=" + std::to_string(recorded) +
-                       " nativeFailure=" + std::to_string(At<uint8_t>(r, 0x767fa)));
-                // Even on failure, any recorded work must be published after
-                // submission so its GPU-side wait is not left without a worker.
+                       " recordResult=" + std::to_string(recordResult) +
+                       " pending=" + std::to_string(pendingRecorded) +
+                       " nativeFailure=" + std::to_string(At<uint8_t>(r, c.nativeFailure)));
+                // Legacy nativeFailure may accompany recorded work, which must
+                // still be published. A v0.3.1 false return is never accepted.
                 break;
             }
         }
@@ -1087,9 +1121,9 @@ void Backend::Submitting(ID3D12CommandQueue* queue, UINT n, ID3D12CommandList* c
         for (auto h : p->runtime)
             if (h)
             {
-                auto old = At<ID3D12CommandQueue*>(h, 0x764d0);
+                auto old = At<ID3D12CommandQueue*>(h, p->contract->queue);
                 queue->AddRef();
-                At<ID3D12CommandQueue*>(h, 0x764d0) = queue;
+                At<ID3D12CommandQueue*>(h, p->contract->queue) = queue;
                 if (old)
                     old->Release();
             }
@@ -1117,7 +1151,7 @@ void Backend::Submitted(ID3D12CommandQueue* queue, UINT n, ID3D12CommandList* co
     if (p->activePasses == 1)
     {
         auto h = p->runtime[0];
-        reinterpret_cast<NotifyFn>(reinterpret_cast<uintptr_t>(h) + 0x4640)(queue, n, lists);
+        reinterpret_cast<NotifyFn>(reinterpret_cast<uintptr_t>(h) + p->contract->notify)(queue, n, lists);
         p->telemetrySubmitted = GetTickCount64();
         p->firstPublished = true;
         auto value = ++p->serial;
@@ -1137,12 +1171,12 @@ void Backend::Submitted(ID3D12CommandQueue* queue, UINT n, ID3D12CommandList* co
     {
         auto h = p->runtime[i];
         if (i != 0 || !p->firstPublished)
-            reinterpret_cast<NotifyFn>(reinterpret_cast<uintptr_t>(h) + 0x4640)(queue, n, lists);
+            reinterpret_cast<NotifyFn>(reinterpret_cast<uintptr_t>(h) + p->contract->notify)(queue, n, lists);
         // All runtimes use HIP stream 0. Publish the next pass only once the previous
         // worker finished; otherwise its capture-wait kernel could block the first pass.
         auto start = GetTickCount64();
-        while (static_cast<UINT>(InterlockedCompareExchange(reinterpret_cast<volatile LONG*>(&At<UINT>(h, 0x76c14)), 0,
-                                                            0)) < p->jobs[i])
+        while (static_cast<UINT>(InterlockedCompareExchange(
+                   reinterpret_cast<volatile LONG*>(&At<UINT>(h, p->contract->completedJob)), 0, 0)) < p->jobs[i])
         {
             if (GetTickCount64() - start > 5000)
             {
@@ -1166,7 +1200,7 @@ void Backend::Submitted(ID3D12CommandQueue* queue, UINT n, ID3D12CommandList* co
     {
         bool timedOut = false;
         for (UINT i = 0; i < p->activePasses; ++i)
-            timedOut |= At<UINT>(p->runtime[i], 0x76c18) > p->observedTimeouts[i];
+            timedOut |= At<UINT>(p->runtime[i], p->contract->timeoutCounter) > p->observedTimeouts[i];
         if (timedOut)
         {
             // Record consumes the native counters and schedules safe recovery.
@@ -1192,7 +1226,7 @@ std::string Backend::Status() const
     for (UINT i = 0; i < p->runtime.size(); ++i)
         if (p->runtime[i])
         {
-            auto count = At<UINT>(p->runtime[i], 0x76c18);
+            auto count = At<UINT>(p->runtime[i], p->contract->timeoutCounter);
             if (count > p->observedTimeouts[i])
                 reportedTimeouts += count - p->observedTimeouts[i];
         }
@@ -1222,7 +1256,7 @@ bool Backend::Shutdown()
         {
             if (p->hipSet)
                 p->hipSet(p->hipDevice);
-            reinterpret_cast<void (*)()>(reinterpret_cast<uintptr_t>(h) + 0xc520)();
+            reinterpret_cast<void (*)()>(reinterpret_cast<uintptr_t>(h) + p->contract->shutdown)();
         }
     p->failed = true;
     p->Log("Workers stopped outside loader lock");
