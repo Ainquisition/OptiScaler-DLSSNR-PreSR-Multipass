@@ -227,45 +227,114 @@ struct Backend::Impl
     bool firstPublished = false;
     bool asyncSingle = false;
     UINT64 asyncStart = 0;
+    UINT64 telemetryRecord = 0, telemetrySubmitting = 0, telemetrySubmitted = 0;
+    UINT64 telemetryNativeCompleted = 0, telemetryFenceCompleted = 0;
+    uintptr_t telemetryRecordQueue = 0, telemetrySubmitQueue = 0;
+    UINT telemetryConfiguredPasses = 0;
+    float telemetryScale = 1.0f;
+    bool telemetryHistoryReset = false, telemetryQueueChanged = false, telemetryCompletionSplit = false;
+    bool telemetryPendingLogged = false, telemetryBaselineLogged = false;
     UINT width = 0, height = 0, activePasses = 0, availablePasses = 0, lastPasses = 0,
          lastConfiguredPasses = 0;
     HipSetFn hipSet = nullptr;
     int hipDevice = -1;
     std::mutex lock;
+    void AppendLog(const std::string& s)
+    {
+        std::ofstream out(directory / L"amd_presr.log", std::ios::app);
+        out << GetTickCount64() << " " << s << '\n';
+    }
     void Log(const std::string& s)
     {
         status = s;
-        std::ofstream out(directory / L"amd_presr.log", std::ios::app);
-        out << GetTickCount64() << " " << s << '\n';
+        AppendLog(s);
+    }
+    static std::string Elapsed(UINT64 from, UINT64 to)
+    {
+        return from && to >= from ? std::to_string(to - from) : "n/a";
+    }
+    void LogSingleTelemetry(const char* event, UINT64 now)
+    {
+        auto h = runtime[0];
+        const UINT nativeDone = h ? static_cast<UINT>(InterlockedCompareExchange(
+            reinterpret_cast<volatile LONG*>(&At<UINT>(h, 0x76c14)), 0, 0)) : 0;
+        const UINT timeouts = h ? static_cast<UINT>(InterlockedCompareExchange(
+            reinterpret_cast<volatile LONG*>(&At<UINT>(h, 0x76c18)), 0, 0)) : 0;
+        const UINT64 fenceTarget = completion.load();
+        const UINT64 fenceDone = fence ? fence->GetCompletedValue() : 0;
+        AppendLog("AMD timeout telemetry: event=" + std::string(event) +
+                  " job_expected=" + std::to_string(jobs[0]) +
+                  " job_completed=" + std::to_string(nativeDone) +
+                  " fence_target=" + std::to_string(fenceTarget) +
+                  " fence_completed=" + std::to_string(fenceDone) +
+                  " t_record_ms=" + std::to_string(telemetryRecord) +
+                  " t_submitting_ms=" + (telemetrySubmitting ? std::to_string(telemetrySubmitting) : "n/a") +
+                  " t_notify_ms=" + (telemetrySubmitted ? std::to_string(telemetrySubmitted) : "n/a") +
+                  " t_check_ms=" + std::to_string(now) +
+                  " dt_record_submit_ms=" + Elapsed(telemetryRecord, telemetrySubmitting) +
+                  " dt_submit_notify_ms=" + Elapsed(telemetrySubmitting, telemetrySubmitted) +
+                  " dt_submitted_now_ms=" + Elapsed(telemetrySubmitted, now) +
+                  " dt_record_now_ms=" + Elapsed(telemetryRecord, now) +
+                  " native_completed_seen_ms=" +
+                  (telemetryNativeCompleted ? std::to_string(telemetryNativeCompleted) : "n/a") +
+                  " fence_completed_seen_ms=" +
+                  (telemetryFenceCompleted ? std::to_string(telemetryFenceCompleted) : "n/a") +
+                  " completion_split=" + std::to_string(telemetryCompletionSplit) +
+                  " size=" + std::to_string(width) + "x" + std::to_string(height) +
+                  " scale=" + std::to_string(telemetryScale) +
+                  " passes_configured=" + std::to_string(telemetryConfiguredPasses) +
+                  " passes_effective=" + std::to_string(activePasses) +
+                  " history_reset=" + std::to_string(telemetryHistoryReset) +
+                  " timeout_counter=" + std::to_string(timeouts) +
+                  " pending=" + std::to_string(pending.load() != nullptr) +
+                  " async=" + std::to_string(asyncSingle) +
+                  " queue_record=" + std::to_string(telemetryRecordQueue) +
+                  " queue_submit=" + std::to_string(telemetrySubmitQueue) +
+                  " queue_changed=" + std::to_string(telemetryQueueChanged));
     }
     // Called with lock held. Keep every borrowed resource alive until BOTH
     // native inference and the actual D3D12 submission have retired.
     void RetireSingle()
     {
         if (!asyncSingle) return;
+        const UINT64 now = GetTickCount64();
         auto done = static_cast<UINT>(InterlockedCompareExchange(
             reinterpret_cast<volatile LONG*>(&At<UINT>(runtime[0], 0x76c14)), 0, 0));
-        if (done < jobs[0] || fence->GetCompletedValue() < completion.load())
+        const UINT64 fenceTarget = completion.load();
+        const UINT64 fenceDone = fence->GetCompletedValue();
+        if (!telemetryNativeCompleted && done >= jobs[0]) telemetryNativeCompleted = now;
+        if (!telemetryFenceCompleted && fenceDone >= fenceTarget) telemetryFenceCompleted = now;
+        if ((telemetryNativeCompleted != 0) != (telemetryFenceCompleted != 0)) telemetryCompletionSplit = true;
+        if (done < jobs[0] || fenceDone < fenceTarget)
         {
-            if (!failed && GetTickCount64() - asyncStart > 5000)
+            if (!failed && now - asyncStart > 5000)
             {
                 failed = true;
                 Log("AMD stopped: asynchronous capture/completion exceeded 5 seconds; resources retained; native=" +
                     std::to_string(done) + "/" + std::to_string(jobs[0]) + " fence=" +
-                    std::to_string(fence->GetCompletedValue()) + "/" + std::to_string(completion.load()));
+                    std::to_string(fenceDone) + "/" + std::to_string(fenceTarget));
             }
             return;
         }
         asyncSingle = false;
 
         pending.store(nullptr, std::memory_order_release);
-        lastSubmitted = GetTickCount64();
+        lastSubmitted = now;
+        const bool longPending = telemetryPendingLogged;
+        if (longPending)
+            LogSingleTelemetry("long-pending-retired", now);
         if (!failed && At<UINT>(runtime[0], 0x76c18) == observedTimeouts[0])
         {
+            if (!telemetryBaselineLogged && !longPending)
+            {
+                LogSingleTelemetry("first-completed", lastSubmitted);
+            }
+            telemetryBaselineLogged = true;
             ++completedFrames;
             lastCompleted = lastSubmitted;
             status = "Completed AMD pre-SR passes=1 at " + std::to_string(width) + "x" + std::to_string(height);
         }
+        telemetryPendingLogged = false;
     }
     void InitHip()
     {
@@ -478,6 +547,11 @@ ID3D12Resource* Backend::Record(ID3D12GraphicsCommandList* cmd, const Frame& inc
         }
         if (p->pending.load())
         {
+            if (!p->telemetryPendingLogged && p->activePasses == 1)
+            {
+                p->LogSingleTelemetry("pending-after-100ms", GetTickCount64());
+                p->telemetryPendingLogged = true;
+            }
             if (++p->pendingSkips <= 3 || p->pendingSkips % 120 == 0)
                 p->Log("AMD skipped: previous neural submission still pending after 100 ms; count=" + std::to_string(p->pendingSkips));
             return nullptr;
@@ -520,6 +594,8 @@ ID3D12Resource* Backend::Record(ID3D12GraphicsCommandList* cmd, const Frame& inc
     {
         p->retryAfter = GetTickCount64() + 1000;
         p->resetAfterTimeout = true;
+        if (p->activePasses == 1)
+            p->LogSingleTelemetry("runtime-timeout-recovery", GetTickCount64());
         p->Log("AMD timeout: current input preserved; retry in 1s with fresh history. Events=" +
                std::to_string(p->timeoutEvents));
     }
@@ -902,6 +978,22 @@ ID3D12Resource* Backend::Record(ID3D12GraphicsCommandList* cmd, const Frame& inc
             ++p->frames;
             p->firstPublished = false;
             p->pending.store(cmd, std::memory_order_release);
+            if (accepted == 1)
+            {
+                p->telemetryRecord = GetTickCount64();
+                p->telemetrySubmitting = 0;
+                p->telemetrySubmitted = 0;
+                p->telemetryNativeCompleted = 0;
+                p->telemetryFenceCompleted = 0;
+                p->telemetryRecordQueue = reinterpret_cast<uintptr_t>(p->queue.Get());
+                p->telemetrySubmitQueue = 0;
+                p->telemetryConfiguredPasses = configuredPasses;
+                p->telemetryScale = scale;
+                p->telemetryHistoryReset = resetHistory;
+                p->telemetryQueueChanged = false;
+                p->telemetryCompletionSplit = false;
+                p->telemetryPendingLogged = false;
+            }
         }
         if (p->failed)
             return nullptr;
@@ -977,6 +1069,12 @@ void Backend::Submitting(ID3D12CommandQueue* queue, UINT n, ID3D12CommandList* c
     std::lock_guard guard(p->lock);
     if (p->pending.load() != pending || p->firstPublished)
         return;
+    if (p->activePasses == 1 && !p->telemetrySubmitting)
+    {
+        p->telemetrySubmitting = GetTickCount64();
+        p->telemetrySubmitQueue = reinterpret_cast<uintptr_t>(queue);
+        p->telemetryQueueChanged = queue != p->queue.Get();
+    }
     if (p->frames <= 3)
         p->Log("Neural submission: lists=" + std::to_string(n) + " queueType=" +
                std::to_string(static_cast<UINT>(queue->GetDesc().Type)));
@@ -1020,6 +1118,7 @@ void Backend::Submitted(ID3D12CommandQueue* queue, UINT n, ID3D12CommandList* co
     {
         auto h = p->runtime[0];
         reinterpret_cast<NotifyFn>(reinterpret_cast<uintptr_t>(h) + 0x4640)(queue, n, lists);
+        p->telemetrySubmitted = GetTickCount64();
         p->firstPublished = true;
         auto value = ++p->serial;
         if (FAILED(queue->Signal(p->fence.Get(), value)))
