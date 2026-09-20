@@ -1,5 +1,6 @@
 // AMD HIP backend adapted from MatheusGViana/dlss-5-amd-project (7b9dcb9).
 #include "AmdPreSr.h"
+#include "AmdPrerequisites.h"
 #include "RuntimeHash.h"
 #include "ColorEncoding.h"
 #include <wrl/client.h>
@@ -226,7 +227,8 @@ struct Backend::Impl
     bool firstPublished = false;
     bool asyncSingle = false;
     UINT64 asyncStart = 0;
-    UINT width = 0, height = 0, activePasses = 0, lastPasses = 0;
+    UINT width = 0, height = 0, activePasses = 0, availablePasses = 0, lastPasses = 0,
+         lastConfiguredPasses = 0;
     HipSetFn hipSet = nullptr;
     int hipDevice = -1;
     std::mutex lock;
@@ -601,8 +603,17 @@ ID3D12Resource* Backend::Record(ID3D12GraphicsCommandList* cmd, const Frame& inc
         }
         if (f.motion->GetDesc().Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)
             throw std::runtime_error("Unsupported depth-stencil motion buffer: " + Layout(f.motion));
-        p->activePasses = std::clamp(cfg.passes, 1u, 3u);
+        const UINT configuredPasses = std::clamp(cfg.passes, 1u, 3u);
+        if (!p->availablePasses)
+            p->availablePasses = DlssNr::AmdBridge::ContiguousPassFileCount(p->directory, 3);
+        p->activePasses = (std::min)(configuredPasses, p->availablePasses);
         bool passChange = p->lastPasses != p->activePasses;
+        if (p->activePasses < configuredPasses &&
+            (p->lastConfiguredPasses != configuredPasses || passChange))
+            p->Log("AMD pre-SR: configured passes=" + std::to_string(configuredPasses) +
+                   ", effective passes=" + std::to_string(p->activePasses) + "; missing dlssnr_amd_pass" +
+                   std::to_string(p->activePasses + 1) + ".dll");
+        p->lastConfiguredPasses = configuredPasses;
         p->lastPasses = p->activePasses;
         for (UINT i = 0; i < p->activePasses; ++i)
             p->InitPass(i);

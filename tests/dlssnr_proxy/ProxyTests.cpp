@@ -87,6 +87,17 @@ int main()
            "AMD pre-SR unavailable: missing dlssnr_on_amd_weights.bin");
     std::ofstream(prerequisites / L"dlssnr_on_amd_weights.bin").put('\0');
     assert(DlssNr::AmdBridge::MissingPrerequisite(prerequisites).empty());
+
+    assert(DlssNr::AmdBridge::ContiguousPassFileCount(prerequisites, 2) == 1);
+    assert(DlssNr::AmdBridge::ContiguousPassFileCount(prerequisites, 3) == 1);
+    std::ofstream(prerequisites / L"dlssnr_amd_pass3.dll").put('\0');
+    assert(DlssNr::AmdBridge::ContiguousPassFileCount(prerequisites, 3) == 1);
+    std::ofstream(prerequisites / L"dlssnr_amd_pass2.dll").put('\0');
+    assert(DlssNr::AmdBridge::ContiguousPassFileCount(prerequisites, 1) == 1);
+    assert(DlssNr::AmdBridge::ContiguousPassFileCount(prerequisites, 2) == 2);
+    assert(DlssNr::AmdBridge::ContiguousPassFileCount(prerequisites, 3) == 3);
+    assert(std::filesystem::remove(prerequisites / L"dlssnr_amd_pass3.dll"));
+    assert(DlssNr::AmdBridge::ContiguousPassFileCount(prerequisites, 3) == 2);
     std::filesystem::remove_all(prerequisites, filesystemError);
 
     DlssNr::Proxy::Context proxy;
