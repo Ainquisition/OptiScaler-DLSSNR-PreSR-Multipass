@@ -2,6 +2,7 @@
 
 #include "DlssNr_MenuSections.h"
 #include <Config.h>
+#include <dlssnr/amd/AmdBridge.h>
 #include <algorithm>
 #include <cstring>
 #include <string>
@@ -13,10 +14,16 @@ namespace DlssNr::MenuSections
 // Model tuning rebuilds the feature; commit slider changes only on release.
 template <typename Option>
 static bool DeferredSlider(const char* label, Option* opt, float mn, float mx, float def, const char* fmt = "%.2f",
-                           bool inheritReset = false)
+                           bool inheritReset = false, bool disabled = false)
 {
     static std::unordered_map<ImGuiID, float> pending;
     const ImGuiID id = ImGui::GetID(label);
+
+    if (disabled)
+    {
+        pending.erase(id);
+        ImGui::BeginDisabled();
+    }
 
     auto it = pending.find(id);
     float value = it != pending.end() ? it->second : (opt->has_value() ? opt->value() : def);
@@ -58,6 +65,13 @@ static bool DeferredSlider(const char* label, Option* opt, float mn, float mx, f
         HelpMarker("Broad lighting changes. Later passes default to 0.");
     else if (std::strcmp(label, "Skin structure") == 0)
         HelpMarker("Skin detail. -1 follows Local structure.");
+
+    if (disabled)
+    {
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::TextDisabled("Unsupported by AMD pre-SR backend");
+    }
     return changed;
 }
 
@@ -84,6 +98,7 @@ static bool InheritedProfileCombo(const char* label, CustomOptional<uint32_t, No
 
 void RenderModel(Config* config, float menuResScale)
 {
+    const bool amdPreSrActive = AmdBridge::IsActive();
     bool unlockPasses = config->DlssNrUnlockPasses.value_or_default();
     const int menuPassLimit = unlockPasses ? 10 : 2;
     {
@@ -121,7 +136,7 @@ void RenderModel(Config* config, float menuResScale)
         if (ImGui::Combo("Style", &style, styles, IM_ARRAYSIZE(styles)))
             config->DlssNrStyle = (uint32_t) style;
 
-        DeferredSlider("Intensity", &config->DlssNrIntensity, 0.0f, 2.0f, 1.0f);
+        DeferredSlider("Intensity", &config->DlssNrIntensity, 0.0f, 2.0f, 1.0f, "%.2f", false, amdPreSrActive);
         DeferredSlider("Local structure", &config->DlssNrLocalStructure, 0.0f, 2.0f, 1.0f);
         DeferredSlider("Local tone", &config->DlssNrLocalTone, 0.0f, 2.0f, 1.0f);
         DeferredSlider("Skin structure", &config->DlssNrSkinStructure, -1.0f, 2.0f, -1.0f);
@@ -136,7 +151,7 @@ void RenderModel(Config* config, float menuResScale)
     {
         InheritedProfileCombo("Style", &config->DlssNrPass2Style, inheritedStyles, IM_ARRAYSIZE(inheritedStyles));
         DeferredSlider("Intensity", &config->DlssNrPass2Intensity, 0.0f, 2.0f,
-                       config->DlssNrIntensity.value_or_default(), "%.2f", true);
+                       config->DlssNrIntensity.value_or_default(), "%.2f", true, amdPreSrActive);
         DeferredSlider("Local structure", &config->DlssNrPass2LocalStructure, 0.0f, 2.0f,
                        config->DlssNrLocalStructure.value_or_default(), "%.2f", true);
         DeferredSlider("Local tone", &config->DlssNrPass2LocalTone, 0.0f, 2.0f, 0.0f, "%.2f", true);

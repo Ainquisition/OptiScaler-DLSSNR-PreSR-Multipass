@@ -61,6 +61,7 @@ bool IFeature_Dx12::Evaluate(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX
         timingQueue = State::Instance().currentCommandQueue;
     if (!IsInited())
     {
+        DlssNr::AmdBridge::SetActive(false);
         LOG_ERROR("Not inited!");
         return false;
     }
@@ -70,6 +71,7 @@ bool IFeature_Dx12::Evaluate(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX
                                     !sourceRayReconstruction && GetUpscalerType() != Upscaler::DLSSD &&
                                     DlssNr::AmdBridge::CanUse(Device) &&
                                     DlssNr::CanRunBeforeUpscale_Dx12(InParameters);
+    DlssNr::AmdBridge::SetActive(amdNrBeforeUpscale);
 
     if (!amdNrBeforeUpscale && !NeuralRendering && Config::Instance()->DlssNrEnabled.value_or_default())
         NeuralRendering = std::make_unique<DlssNr_Dx12>("Neural Rendering", Device);

@@ -21,6 +21,7 @@ namespace DlssNr::AmdBridge
 namespace
 {
 std::atomic<AmdPreSr::Backend*> backend { nullptr };
+std::atomic<bool> active { false };
 std::mutex initMutex;
 std::mutex frameMutex;
 std::mutex messageMutex;
@@ -117,6 +118,10 @@ AmdPreSr::Backend* BackendFor(ID3D12Device* device, ID3D12CommandQueue* queue)
     }
 }
 } // namespace
+
+bool IsActive() { return active.load(); }
+
+void SetActive(bool value) { active.store(value); }
 
 bool HasFiles()
 {
