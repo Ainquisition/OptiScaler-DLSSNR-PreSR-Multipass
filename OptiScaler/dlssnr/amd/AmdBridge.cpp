@@ -263,10 +263,10 @@ ID3D12Resource* Prepare(ID3D12GraphicsCommandList* commandList, NVSDK_NGX_Parame
     if (settings.skin < 0.0f)
         settings.skin = settings.structure;
 
-    auto* replacement = owner->Record(commandList, frame, settings);
-    if (replacement)
-        Message("");
-    return replacement;
+    // Every bridge-level condition above has passed. Let Record's status explain
+    // a skip or failure instead of retaining an earlier transient bridge message.
+    Message("");
+    return owner->Record(commandList, frame, settings);
 }
 
 int PendingListIndex(UINT count, ID3D12CommandList* const* lists)

@@ -67,6 +67,11 @@ void RenderStatus(Config* config, float menuResScale)
     {
         ImGui::TextWrapped("%s", amdPrerequisite.c_str());
     }
+    else if (AmdBridge::IsActive())
+    {
+        const auto status = AmdBridge::Status();
+        ImGui::TextWrapped("%s", status.c_str());
+    }
     else if (!DlssNr::IsRunning() && !vulkan)
     {
         const auto feature = State::Instance().currentFeature;
